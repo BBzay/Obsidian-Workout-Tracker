@@ -1,1 +1,1251 @@
-/* Plugin styles go here */
+/* ═══════════════════════════════════════════════════════════════════════════
+   WORKOUT TRACKER — Plugin Styles
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── General ──────────────────────────────────────────────────────────────── */
+
+.wt-title {
+  margin: 0 0 12px 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.wt-muted {
+  color: var(--text-muted);
+}
+
+.wt-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  min-height: 44px;
+  min-width: 44px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  transition: background 0.15s;
+}
+
+.wt-btn:hover {
+  background: var(--interactive-hover);
+}
+
+.wt-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.wt-btn-primary {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+.wt-btn-primary:hover {
+  background: var(--interactive-accent-hover);
+}
+
+.wt-btn-danger {
+  color: var(--text-error);
+  border-color: var(--text-error);
+}
+
+.wt-btn-danger:hover {
+  background: var(--text-error);
+  color: var(--text-on-accent);
+}
+
+.wt-btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+  min-height: 36px;
+  min-width: 36px;
+}
+
+.wt-btn-icon {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 16px;
+  padding: 4px 8px;
+  min-height: 44px;
+  min-width: 44px;
+  border-radius: 4px;
+}
+
+.wt-btn-icon:hover {
+  color: var(--text-error);
+  background: var(--background-modifier-hover);
+}
+
+/* ─── Modal Buttons ────────────────────────────────────────────────────────── */
+
+.wt-modal-buttons {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.wt-modal-buttons button {
+  padding: 8px 18px;
+  min-height: 44px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOP BAR (shared across screens)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wt-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.wt-topbar-title {
+  font-weight: 700;
+  font-size: 15px;
+  flex: 1;
+}
+
+.wt-back-btn {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HOME SCREEN
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wt-home-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.wt-home-title {
+  margin: 0;
+  font-size: 18px;
+}
+
+.wt-home-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.wt-workout-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.wt-workout-card {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.wt-workout-card:hover {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.wt-workout-card-body {
+  padding: 14px 16px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: relative;
+}
+
+.wt-workout-card-name {
+  font-weight: 700;
+  font-size: 16px;
+  padding-right: 30px;
+}
+
+.wt-workout-card-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.wt-workout-card-duration {
+  color: var(--text-accent);
+  font-weight: 500;
+}
+
+.wt-workout-card-last {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.wt-workout-card-arrow {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  opacity: 0.5;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.wt-workout-card:hover .wt-workout-card-arrow {
+  opacity: 1;
+  color: #22c55e;
+}
+
+.wt-home-add-btn {
+  width: 100%;
+}
+
+.wt-empty-state {
+  text-align: center;
+  padding: 40px 20px;
+}
+
+.wt-empty-state-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   EDIT MODE
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wt-selector-row {
+  margin-bottom: 10px;
+}
+
+.wt-workout-select {
+  width: 100%;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  font-size: 14px;
+  min-height: 44px;
+}
+
+.wt-btn-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.wt-editor {
+  padding-top: 8px;
+}
+
+.wt-workout-name-input {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 16px;
+  font-weight: 600;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  margin-bottom: 16px;
+  box-sizing: border-box;
+}
+
+/* ─── Exercise Cards ───────────────────────────────────────────────────────── */
+
+.wt-exercise-card {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  transition: opacity 0.2s, border-color 0.2s;
+}
+
+.wt-exercise-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.wt-exercise-name-input {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 14px;
+  font-weight: 500;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+}
+
+/* ─── Drag and Drop ───────────────────────────────────────────────────────── */
+
+.wt-drag-handle {
+  cursor: grab;
+  color: var(--text-muted);
+  font-size: 18px;
+  padding: 4px;
+  line-height: 1;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.wt-drag-handle:active {
+  cursor: grabbing;
+}
+
+.wt-exercise-card.wt-dragging {
+  opacity: 0.4;
+  border-color: var(--interactive-accent);
+}
+
+.wt-exercise-card.wt-drop-above {
+  border-top: 3px solid var(--interactive-accent);
+}
+
+.wt-exercise-card.wt-drop-below {
+  border-bottom: 3px solid var(--interactive-accent);
+}
+
+.wt-move-btn {
+  min-width: 32px !important;
+  min-height: 32px !important;
+  padding: 2px !important;
+}
+
+.wt-move-btn:hover {
+  color: var(--interactive-accent) !important;
+}
+
+/* ─── Sets Table ───────────────────────────────────────────────────────────── */
+
+.wt-sets-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.wt-sets-table th {
+  text-align: left;
+  font-weight: 600;
+  padding: 4px 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.wt-sets-table td {
+  padding: 4px 6px;
+}
+
+.wt-set-input {
+  width: 60px;
+  padding: 4px 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  font-size: 13px;
+  min-height: 36px;
+}
+
+.wt-add-exercise-btn {
+  width: 100%;
+  margin-top: 4px;
+  margin-bottom: 16px;
+}
+
+/* ─── Bottom Action Row ────────────────────────────────────────────────────── */
+
+.wt-bottom-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.wt-btn-start {
+  background: #22c55e;
+  color: #fff;
+  border-color: #22c55e;
+  font-weight: 600;
+}
+
+.wt-btn-start:hover {
+  background: #16a34a;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ACTIVE MODE
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wt-active-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 12px;
+}
+
+.wt-active-title {
+  font-weight: 700;
+  font-size: 16px;
+  flex: 1;
+}
+
+/* ─── Progress Bar ─────────────────────────────────────────────────────────── */
+
+.wt-progress-container {
+  position: relative;
+  height: 28px;
+  background: var(--background-modifier-border);
+  border-radius: 14px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.wt-progress-bar {
+  height: 100%;
+  background: var(--interactive-accent);
+  border-radius: 14px;
+  transition: width 0.4s ease;
+  min-width: 0;
+}
+
+.wt-progress-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-normal);
+  text-shadow: 0 0 4px var(--background-primary);
+}
+
+/* ─── Current Panel ────────────────────────────────────────────────────────── */
+
+.wt-current-panel {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.wt-set-panel {
+  border-left: 4px solid var(--interactive-accent);
+}
+
+.wt-rest-panel {
+  border-left: 4px solid #f59e0b;
+  background: color-mix(in srgb, #f59e0b 8%, var(--background-secondary));
+}
+
+.wt-set-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+/* ─── Modifier ─────────────────────────────────────────────────────────────── */
+
+.wt-modifier {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text-accent);
+  margin-bottom: 14px;
+  font-style: italic;
+}
+
+.wt-modifier-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.wt-modifier-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.wt-modifier-input {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-style: italic;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  min-height: 36px;
+}
+
+.wt-rest-label {
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #f59e0b;
+  margin-bottom: 8px;
+}
+
+/* ─── Timers ───────────────────────────────────────────────────────────────── */
+
+.wt-big-timer {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 48px;
+  font-weight: 700;
+  text-align: center;
+  padding: 16px 0;
+  color: var(--text-normal);
+  transition: color 0.3s;
+}
+
+.wt-timer-overtime {
+  color: #ef4444 !important;
+}
+
+.wt-rest-overtime {
+  border-left-color: #ef4444 !important;
+  background: color-mix(in srgb, #ef4444 8%, var(--background-secondary)) !important;
+}
+
+.wt-rest-overtime .wt-rest-label {
+  color: #ef4444;
+}
+
+.wt-timer-value {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-weight: 600;
+}
+
+.wt-set-elapsed {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  text-align: center;
+}
+
+/* ─── Active Input Rows ────────────────────────────────────────────────────── */
+
+.wt-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.wt-input-row label {
+  min-width: 100px;
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.wt-active-input {
+  width: 100px;
+  padding: 8px 10px;
+  font-size: 16px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  min-height: 44px;
+}
+
+/* ─── Complete Set Button ──────────────────────────────────────────────────── */
+
+.wt-btn-complete {
+  width: 100%;
+  margin-top: 16px;
+  padding: 12px;
+  font-size: 16px;
+  font-weight: 700;
+  background: #22c55e;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  min-height: 52px;
+}
+
+.wt-btn-complete:hover {
+  background: #16a34a;
+}
+
+/* ─── Next Card ────────────────────────────────────────────────────────────── */
+
+.wt-next-card {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.wt-next-label {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+/* ─── Previous Sets ────────────────────────────────────────────────────────── */
+
+.wt-previous-sets {
+  margin-top: 12px;
+}
+
+.wt-prev-heading {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.wt-prev-set-label {
+  font-weight: 500;
+  min-width: 90px;
+  white-space: nowrap;
+}
+
+.wt-prev-set-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.wt-prev-input {
+  width: 60px;
+  padding: 4px 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  font-size: 13px;
+  min-height: 36px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   COMPLETION SCREEN
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wt-completion {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 24px;
+}
+
+.wt-completion-title {
+  font-size: 24px;
+  margin-bottom: 20px;
+  color: #22c55e;
+}
+
+.wt-summary {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  padding: 20px 24px;
+  width: 100%;
+  max-width: 360px;
+  margin-bottom: 24px;
+}
+
+.wt-summary-item {
+  padding: 6px 0;
+  font-size: 15px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.wt-summary-item:last-child {
+  border-bottom: none;
+}
+
+.wt-return-btn {
+  min-width: 200px;
+  font-size: 15px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PERSONAL RECORDS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wt-pr-section {
+  width: 100%;
+  max-width: 360px;
+  margin-bottom: 24px;
+}
+
+.wt-pr-title {
+  color: #f59e0b;
+  font-size: 18px;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.wt-pr-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 14px;
+}
+
+.wt-pr-badge {
+  display: inline-block;
+  background: linear-gradient(135deg, #f59e0b, #eab308);
+  color: #000;
+  font-weight: 800;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.wt-pr-badge-inline {
+  color: #f59e0b;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.wt-pr-item-small {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 13px;
+}
+
+.wt-history-pr-list {
+  padding: 6px 0;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.wt-pr-table {
+  margin-bottom: 16px;
+}
+
+.wt-pr-table-row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.wt-pr-exercise-name {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.wt-pr-values {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.wt-pr-value-item {
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HISTORY & STATS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Tab Bar ──────────────────────────────────────────────────────────────── */
+
+.wt-tab-bar {
+  display: flex;
+  gap: 0;
+  margin-bottom: 14px;
+  border-bottom: 2px solid var(--background-modifier-border);
+}
+
+.wt-tab {
+  padding: 8px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  min-height: 44px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.wt-tab:hover {
+  color: var(--text-normal);
+}
+
+.wt-tab-active {
+  color: var(--text-accent);
+  border-bottom-color: var(--text-accent);
+}
+
+.wt-history {
+  padding-bottom: 20px;
+}
+
+.wt-empty-msg {
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 20px 0;
+}
+
+/* ─── Filter Row ──────────────────────────────────────────────────────────── */
+
+.wt-filter-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.wt-filter-select {
+  flex: 1;
+}
+
+/* ─── History List ─────────────────────────────────────────────────────────── */
+
+.wt-history-list {
+  margin-top: 12px;
+}
+
+.wt-history-card {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.wt-history-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wt-history-info {
+  flex: 1;
+}
+
+.wt-history-name {
+  font-weight: 600;
+  font-size: 15px;
+  margin-bottom: 2px;
+}
+
+.wt-history-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.wt-history-details {
+  margin-top: 8px;
+}
+
+.wt-history-details summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 4px 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+.wt-history-exercise {
+  margin: 6px 0;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.wt-history-exercise:last-child {
+  border-bottom: none;
+}
+
+.wt-history-set {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 2px 0 2px 12px;
+}
+
+/* ─── Pagination ──────────────────────────────────────────────────────────── */
+
+.wt-pagination-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.wt-page-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-weight: 500;
+  min-width: 80px;
+  text-align: center;
+}
+
+.wt-pagination-info {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TIME RANGE CONTROLS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wt-time-controls {
+  margin-bottom: 16px;
+}
+
+.wt-time-range-bar {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.wt-time-range-btn {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  background: var(--interactive-normal);
+  color: var(--text-muted);
+  min-height: 40px;
+  transition: background 0.15s, color 0.15s;
+  border-right: 1px solid var(--background-modifier-border);
+}
+
+.wt-time-range-btn:last-child {
+  border-right: none;
+}
+
+.wt-time-range-btn:hover {
+  background: var(--interactive-hover);
+  color: var(--text-normal);
+}
+
+.wt-time-range-active {
+  background: var(--interactive-accent) !important;
+  color: var(--text-on-accent) !important;
+}
+
+.wt-time-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.wt-nav-arrow {
+  min-width: 40px;
+  min-height: 40px;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wt-time-period-label {
+  font-size: 15px;
+  font-weight: 600;
+  min-width: 160px;
+  text-align: center;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   STATS SUMMARY CARDS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wt-stats-summary {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.wt-stat-card {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+
+.wt-stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-normal);
+  margin-bottom: 2px;
+}
+
+.wt-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   STATS / CHARTS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wt-stats {
+  padding-top: 4px;
+}
+
+.wt-stats-section-title {
+  font-weight: 700;
+  font-size: 15px;
+  margin-top: 20px;
+  margin-bottom: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.wt-stats-select-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.wt-stats-select-row label {
+  font-weight: 500;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.wt-stats-select-row select {
+  flex: 1;
+}
+
+.wt-chart {
+  margin-bottom: 20px;
+}
+
+.wt-chart-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.wt-svg-chart {
+  width: 100%;
+  height: auto;
+  max-height: 220px;
+  display: block;
+}
+
+.wt-grid-line {
+  stroke: var(--background-modifier-border);
+  stroke-width: 0.5;
+}
+
+.wt-axis-label {
+  font-size: 8px;
+  fill: var(--text-muted);
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.wt-axis-title {
+  font-size: 8px;
+  fill: var(--text-muted);
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  text-anchor: middle;
+}
+
+.wt-ex-charts {
+  margin-top: 8px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SUPERSETS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wt-superset-box {
+  border: 2px solid var(--interactive-accent);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 14px;
+  background: color-mix(in srgb, var(--interactive-accent) 4%, var(--background-primary));
+}
+
+.wt-ss-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-wrap: wrap;
+}
+
+.wt-ss-label {
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--interactive-accent);
+}
+
+.wt-ss-rest-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.wt-ss-rest-row label {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.wt-ss-active-label {
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 15%, transparent);
+  padding: 3px 10px;
+  border-radius: 4px;
+  display: inline-block;
+  margin-bottom: 6px;
+}
+
+.wt-ss-check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px;
+  font-size: 14px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  min-height: 44px;
+}
+
+.wt-ss-check-row:last-child {
+  border-bottom: none;
+}
+
+.wt-ss-check-row input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+}
+
+.wt-btn-ss {
+  background: color-mix(in srgb, var(--interactive-accent) 12%, var(--interactive-normal));
+  border-color: var(--interactive-accent);
+  color: var(--interactive-accent);
+  font-weight: 600;
+}
+
+.wt-btn-ss:hover {
+  background: color-mix(in srgb, var(--interactive-accent) 25%, var(--interactive-normal));
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   RESPONSIVE / MOBILE
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 500px) {
+  .wt-set-input {
+    width: 48px;
+  }
+
+  .wt-active-input {
+    width: 80px;
+  }
+
+  .wt-big-timer {
+    font-size: 36px;
+  }
+
+  .wt-bottom-row {
+    flex-direction: column;
+  }
+
+  .wt-btn-row {
+    flex-direction: column;
+  }
+
+  .wt-stats-summary {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+
+  .wt-stat-value {
+    font-size: 16px;
+  }
+
+  .wt-time-period-label {
+    font-size: 13px;
+    min-width: 120px;
+  }
+
+  .wt-pr-values {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .wt-workout-card-name {
+    font-size: 15px;
+  }
+}

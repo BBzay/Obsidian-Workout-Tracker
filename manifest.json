@@ -1,9 +1,9 @@
 {
-  "id": "my-obsidian-plugin",
-  "name": "My Obsidian Plugin",
+  "id": "workout-tracker",
+  "name": "Workout Tracker",
   "version": "1.0.0",
   "minAppVersion": "1.4.0",
-  "description": "A custom Obsidian plugin for desktop and mobile.",
+  "description": "Plan workout templates, track active sessions with timers, and review your workout history.",
   "author": "Your Name",
   "authorUrl": "https://yoursite.com",
   "isDesktopOnly": false

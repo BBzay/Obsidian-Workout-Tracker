@@ -15,3 +15,9 @@ node_modules/
 # OS
 .DS_Store
 Thumbs.db
+
+# Plugin data (personal workout history)
+data.json
+
+# Dev tools
+.hotreload
