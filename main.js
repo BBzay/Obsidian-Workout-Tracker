@@ -1796,5 +1796,142 @@ var WorkoutSettingTab = class extends import_obsidian.PluginSettingTab {
         new import_obsidian.Notice("Personal records rebuilt from history.");
       })
     );
+    containerEl.createEl("h3", { text: "Data Management" });
+    new import_obsidian.Setting(containerEl).setName("Export data").setDesc("Export all workouts, history, and stats to a JSON file in your vault.").addButton(
+      (btn) => btn.setButtonText("Export").onClick(async () => {
+        const exportData = JSON.parse(JSON.stringify(this.plugin.data));
+        const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        const fileName = `workout-tracker-export-${timestamp}.json`;
+        const content = JSON.stringify(exportData, null, 2);
+        await this.app.vault.create(fileName, content);
+        new import_obsidian.Notice(`Data exported to ${fileName}`);
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Import data").setDesc("Import workouts, history, and stats from a previously exported JSON file.").addButton(
+      (btn) => btn.setButtonText("Import").onClick(() => {
+        new ImportDataModal(this.app, this.plugin).open();
+      })
+    );
+  }
+};
+var ImportDataModal = class extends import_obsidian.Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "Import Workout Data" });
+    const vaultSection = contentEl.createDiv({ cls: "wt-import-section" });
+    vaultSection.createEl("p", { text: "Select a JSON export file from your vault:" });
+    const fileSelect = vaultSection.createEl("select", { cls: "wt-import-select" });
+    fileSelect.style.width = "100%";
+    fileSelect.style.marginBottom = "8px";
+    const jsonFiles = this.app.vault.getFiles().filter((f) => f.extension === "json" && f.name.startsWith("workout-tracker-export"));
+    if (jsonFiles.length === 0) {
+      const opt = fileSelect.createEl("option", { text: "No export files found in vault" });
+      opt.disabled = true;
+    } else {
+      jsonFiles.sort((a, b) => b.stat.mtime - a.stat.mtime);
+      for (const f of jsonFiles) {
+        fileSelect.createEl("option", { text: f.path, attr: { value: f.path } });
+      }
+    }
+    const importVaultBtn = vaultSection.createEl("button", { text: "Import from vault", cls: "mod-cta" });
+    importVaultBtn.style.marginRight = "8px";
+    importVaultBtn.disabled = jsonFiles.length === 0;
+    importVaultBtn.addEventListener("click", async () => {
+      const path = fileSelect.value;
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (!file || !("extension" in file)) {
+        new import_obsidian.Notice("File not found.");
+        return;
+      }
+      try {
+        const content = await this.app.vault.read(file);
+        await this.doImport(content);
+      } catch (e) {
+        new import_obsidian.Notice("Failed to read file: " + e.message);
+      }
+    });
+    const uploadSection = contentEl.createDiv({ cls: "wt-import-section" });
+    uploadSection.style.marginTop = "16px";
+    uploadSection.createEl("p", { text: "Or paste exported JSON data:" });
+    const textArea = uploadSection.createEl("textarea", { cls: "wt-import-textarea" });
+    textArea.style.width = "100%";
+    textArea.style.height = "120px";
+    textArea.style.fontFamily = "monospace";
+    textArea.style.fontSize = "12px";
+    textArea.placeholder = "Paste JSON data here...";
+    const importPasteBtn = uploadSection.createEl("button", { text: "Import from text", cls: "mod-cta" });
+    importPasteBtn.addEventListener("click", async () => {
+      const content = textArea.value.trim();
+      if (!content) {
+        new import_obsidian.Notice("Please paste JSON data first.");
+        return;
+      }
+      await this.doImport(content);
+    });
+    const modeSection = contentEl.createDiv({ cls: "wt-import-section" });
+    modeSection.style.marginTop = "16px";
+    modeSection.style.padding = "12px";
+    modeSection.style.backgroundColor = "var(--background-secondary)";
+    modeSection.style.borderRadius = "8px";
+    modeSection.createEl("p", { text: "Import mode:", cls: "setting-item-name" });
+    const modeSelect = modeSection.createEl("select", { cls: "wt-import-select" });
+    modeSelect.style.width = "100%";
+    modeSelect.createEl("option", { text: "Merge \u2014 add imported data alongside existing data", attr: { value: "merge" } });
+    modeSelect.createEl("option", { text: "Replace \u2014 overwrite all existing data", attr: { value: "replace" } });
+    this.modeSelect = modeSelect;
+  }
+  async doImport(content) {
+    let imported;
+    try {
+      imported = JSON.parse(content);
+    } catch (e) {
+      new import_obsidian.Notice("Invalid JSON data. Please check the file contents.");
+      return;
+    }
+    if (!imported.workouts || !Array.isArray(imported.workouts) || !imported.history || !Array.isArray(imported.history)) {
+      new import_obsidian.Notice("Invalid data format. Expected workout tracker export data.");
+      return;
+    }
+    const mode = this.modeSelect.value;
+    if (mode === "replace") {
+      this.plugin.data.workouts = imported.workouts || [];
+      this.plugin.data.history = imported.history || [];
+      this.plugin.data.lastUsed = imported.lastUsed || {};
+      this.plugin.data.personalRecords = imported.personalRecords || {};
+      if (imported.settings) {
+        this.plugin.data.settings = Object.assign({}, DEFAULT_SETTINGS, imported.settings);
+      }
+    } else {
+      const existingNames = new Set(this.plugin.data.workouts.map((w) => w.name));
+      for (const w of imported.workouts || []) {
+        if (!existingNames.has(w.name)) {
+          this.plugin.data.workouts.push(w);
+        }
+      }
+      const existingIds = new Set(this.plugin.data.history.map((h) => h.id));
+      for (const h of imported.history || []) {
+        if (!existingIds.has(h.id)) {
+          this.plugin.data.history.push(h);
+        }
+      }
+      Object.assign(this.plugin.data.lastUsed, imported.lastUsed || {});
+    }
+    this.plugin.rebuildAllPRs();
+    await this.plugin.savePluginData();
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_TRACKER);
+    for (const leaf of leaves) {
+      leaf.view.render();
+    }
+    const count = mode === "replace" ? `Replaced with ${imported.workouts.length} workouts and ${imported.history.length} history entries.` : `Merged data. Check your workouts and history.`;
+    new import_obsidian.Notice(`Import complete! ${count}`);
+    this.close();
+  }
+  onClose() {
+    this.contentEl.empty();
   }
 };
