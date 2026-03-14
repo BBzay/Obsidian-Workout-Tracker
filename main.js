@@ -29,7 +29,7 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
-var VIEW_TYPE_TRACKER = "workout-tracker-view";
+var VIEW_TYPE_TRACKER = "workout-ledger-view";
 var DEFAULT_SETTINGS = {
   weightUnit: "lbs",
   defaultRestSeconds: 60,
@@ -384,8 +384,8 @@ var WorkoutTrackerPlugin = class extends import_obsidian.Plugin {
     await this.loadPluginData();
     this.registerView(VIEW_TYPE_TRACKER, (leaf) => new WorkoutTrackerView(leaf, this));
     this.addSettingTab(new WorkoutSettingTab(this.app, this));
-    this.addRibbonIcon("dumbbell", "Open Workout Tracker", () => this.activateView());
-    this.addCommand({ id: "open-workout-tracker", name: "Open Workout Tracker", callback: () => this.activateView() });
+    this.addRibbonIcon("dumbbell", "Open Workout Ledger", () => this.activateView());
+    this.addCommand({ id: "open-workout-ledger", name: "Open Workout Ledger", callback: () => this.activateView() });
     this.addCommand({ id: "start-last-workout", name: "Start Last Workout", callback: () => this.startLastWorkout() });
     this.app.workspace.onLayoutReady(() => {
     });
@@ -561,7 +561,7 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
     return VIEW_TYPE_TRACKER;
   }
   getDisplayText() {
-    return "Workout Tracker";
+    return "Workout Ledger";
   }
   getIcon() {
     return "dumbbell";
@@ -1760,7 +1760,7 @@ var WorkoutSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Workout Tracker Settings" });
+    containerEl.createEl("h2", { text: "Workout Ledger Settings" });
     new import_obsidian.Setting(containerEl).setName("Weight unit").setDesc("Cosmetic label shown next to weight fields.").addDropdown(
       (dd) => dd.addOption("lbs", "lbs").addOption("kg", "kg").setValue(this.plugin.data.settings.weightUnit).onChange(async (v) => {
         this.plugin.data.settings.weightUnit = v;
@@ -1801,7 +1801,7 @@ var WorkoutSettingTab = class extends import_obsidian.PluginSettingTab {
       (btn) => btn.setButtonText("Export").onClick(async () => {
         const exportData = JSON.parse(JSON.stringify(this.plugin.data));
         const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
-        const fileName = `workout-tracker-export-${timestamp}.json`;
+        const fileName = `workout-ledger-export-${timestamp}.json`;
         const content = JSON.stringify(exportData, null, 2);
         await this.app.vault.create(fileName, content);
         new import_obsidian.Notice(`Data exported to ${fileName}`);
@@ -1828,7 +1828,7 @@ var ImportDataModal = class extends import_obsidian.Modal {
     const fileSelect = vaultSection.createEl("select", { cls: "wt-import-select" });
     fileSelect.style.width = "100%";
     fileSelect.style.marginBottom = "8px";
-    const jsonFiles = this.app.vault.getFiles().filter((f) => f.extension === "json" && f.name.startsWith("workout-tracker-export"));
+    const jsonFiles = this.app.vault.getFiles().filter((f) => f.extension === "json" && f.name.startsWith("workout-ledger-export") || f.name.startsWith("workout-tracker-export"));
     if (jsonFiles.length === 0) {
       const opt = fileSelect.createEl("option", { text: "No export files found in vault" });
       opt.disabled = true;
@@ -1894,7 +1894,7 @@ var ImportDataModal = class extends import_obsidian.Modal {
       return;
     }
     if (!imported.workouts || !Array.isArray(imported.workouts) || !imported.history || !Array.isArray(imported.history)) {
-      new import_obsidian.Notice("Invalid data format. Expected workout tracker export data.");
+      new import_obsidian.Notice("Invalid data format. Expected workout ledger export data.");
       return;
     }
     const mode = this.modeSelect.value;

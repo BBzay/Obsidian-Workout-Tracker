@@ -1,6 +1,6 @@
-# Workout Tracker for Obsidian
+# Workout Ledger for Obsidian
 
-A full-featured workout tracker plugin for Obsidian that works on both desktop and mobile. Build workout templates, run timed sessions, track personal records, and review your history with charts and stats — all inside your vault.
+A full-featured workout ledger plugin for Obsidian that works on both desktop and mobile. Build workout templates, run timed sessions, track personal records, and review your history with charts and stats — all inside your vault.
 
 ## Features
 
@@ -54,20 +54,20 @@ A full-featured workout tracker plugin for Obsidian that works on both desktop a
 2. Open BRAT settings and click **"Add Beta plugin"**
 3. Enter this repo URL: `https://github.com/BBzay/Obsidian-Workout-Tracker`
 4. Click **Add Plugin**
-5. Enable **Workout Tracker** in Settings → Community Plugins
+5. Enable **Workout Ledger** in Settings → Community Plugins
 
 ### Manual Installation
 
 1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/BBzay/Obsidian-Workout-Tracker/releases/latest)
-2. Create a folder in your vault: `<vault>/.obsidian/plugins/workout-tracker/`
+2. Create a folder in your vault: `<vault>/.obsidian/plugins/workout-ledger/`
 3. Place the three files inside that folder
-4. Open Obsidian → Settings → Community Plugins → Enable **Workout Tracker**
+4. Open Obsidian → Settings → Community Plugins → Enable **Workout Ledger**
 
 ## Usage
 
 ### Getting Started
 
-1. After enabling the plugin, click the **dumbbell icon** in the left sidebar to open the tracker
+1. After enabling the plugin, click the **dumbbell icon** in the left sidebar to open the ledger
 2. Tap the **pencil icon** (top right) to enter Edit Mode
 3. Create your first workout — give it a name, add exercises, set your target sets/reps/weight
 4. Tap the **back arrow** to return to the Home screen

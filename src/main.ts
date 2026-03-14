@@ -13,7 +13,7 @@ import {
 
 // ─── View Type Constants ─────────────────────────────────────────────────────
 
-const VIEW_TYPE_TRACKER = 'workout-tracker-view';
+const VIEW_TYPE_TRACKER = 'workout-ledger-view';
 
 // ─── Data Model ──────────────────────────────────────────────────────────────
 
@@ -413,9 +413,9 @@ export default class WorkoutTrackerPlugin extends Plugin {
 		this.registerView(VIEW_TYPE_TRACKER, (leaf) => new WorkoutTrackerView(leaf, this));
 		this.addSettingTab(new WorkoutSettingTab(this.app, this));
 
-		this.addRibbonIcon('dumbbell', 'Open Workout Tracker', () => this.activateView());
+		this.addRibbonIcon('dumbbell', 'Open Workout Ledger', () => this.activateView());
 
-		this.addCommand({ id: 'open-workout-tracker', name: 'Open Workout Tracker', callback: () => this.activateView() });
+		this.addCommand({ id: 'open-workout-ledger', name: 'Open Workout Ledger', callback: () => this.activateView() });
 		this.addCommand({ id: 'start-last-workout', name: 'Start Last Workout', callback: () => this.startLastWorkout() });
 
 		this.app.workspace.onLayoutReady(() => {});
@@ -522,7 +522,7 @@ export default class WorkoutTrackerPlugin extends Plugin {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// UNIFIED WORKOUT TRACKER VIEW
+// UNIFIED WORKOUT LEDGER VIEW
 // ═══════════════════════════════════════════════════════════════════════════════
 
 class WorkoutTrackerView extends ItemView {
@@ -547,7 +547,7 @@ class WorkoutTrackerView extends ItemView {
 
 	constructor(leaf: WorkspaceLeaf, plugin: WorkoutTrackerPlugin) { super(leaf); this.plugin = plugin; }
 	getViewType(): string { return VIEW_TYPE_TRACKER; }
-	getDisplayText(): string { return 'Workout Tracker'; }
+	getDisplayText(): string { return 'Workout Ledger'; }
 	getIcon(): string { return 'dumbbell'; }
 
 	async onOpen(): Promise<void> {
@@ -1565,7 +1565,7 @@ class WorkoutSettingTab extends PluginSettingTab {
 
 	display(): void {
 		const { containerEl } = this; containerEl.empty();
-		containerEl.createEl('h2', { text: 'Workout Tracker Settings' });
+		containerEl.createEl('h2', { text: 'Workout Ledger Settings' });
 
 		new Setting(containerEl).setName('Weight unit').setDesc('Cosmetic label shown next to weight fields.').addDropdown((dd) =>
 			dd.addOption('lbs', 'lbs').addOption('kg', 'kg').setValue(this.plugin.data.settings.weightUnit)
@@ -1596,7 +1596,7 @@ class WorkoutSettingTab extends PluginSettingTab {
 			btn.setButtonText('Export').onClick(async () => {
 				const exportData: PluginData = JSON.parse(JSON.stringify(this.plugin.data));
 				const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-				const fileName = `workout-tracker-export-${timestamp}.json`;
+				const fileName = `workout-ledger-export-${timestamp}.json`;
 				const content = JSON.stringify(exportData, null, 2);
 				await this.app.vault.create(fileName, content);
 				new Notice(`Data exported to ${fileName}`);
@@ -1629,7 +1629,7 @@ class ImportDataModal extends Modal {
 		fileSelect.style.width = '100%';
 		fileSelect.style.marginBottom = '8px';
 
-		const jsonFiles = this.app.vault.getFiles().filter(f => f.extension === 'json' && f.name.startsWith('workout-tracker-export'));
+		const jsonFiles = this.app.vault.getFiles().filter(f => f.extension === 'json' && f.name.startsWith('workout-ledger-export') || f.name.startsWith('workout-tracker-export'));
 		if (jsonFiles.length === 0) {
 			const opt = fileSelect.createEl('option', { text: 'No export files found in vault' });
 			opt.disabled = true;
@@ -1701,7 +1701,7 @@ class ImportDataModal extends Modal {
 
 		// Validate structure
 		if (!imported.workouts || !Array.isArray(imported.workouts) || !imported.history || !Array.isArray(imported.history)) {
-			new Notice('Invalid data format. Expected workout tracker export data.');
+			new Notice('Invalid data format. Expected workout ledger export data.');
 			return;
 		}
 
