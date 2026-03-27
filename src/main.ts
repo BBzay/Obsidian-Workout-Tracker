@@ -61,6 +61,7 @@ interface CompletedWorkout {
 	totalDurationSeconds: number;
 	exercises: CompletedExercise[];
 	prs?: string[];
+	notes?: string;
 }
 
 interface PRRecord {
@@ -114,6 +115,12 @@ interface WorkoutStep {
 
 // ─── Active Workout State ────────────────────────────────────────────────────
 
+interface CompletedStepEntry {
+	stepIndex: number;
+	completedSet: CompletedSet;
+	exerciseName: string;
+}
+
 interface ActiveWorkoutState {
 	workout: Workout;
 	startTime: number;
@@ -127,6 +134,10 @@ interface ActiveWorkoutState {
 	restStartTime: number;
 	currentReps: number;
 	currentWeight: number;
+	isPaused: boolean;
+	pauseStartTime: number;
+	totalPausedMs: number;
+	stepHistory: CompletedStepEntry[];
 }
 
 // ─── Screen type for unified view ───────────────────────────────────────────
@@ -200,11 +211,12 @@ function buildSteps(workout: Workout): WorkoutStep[] {
 		} else {
 			processed.add(i);
 			for (let s = 0; s < ex.sets.length; s++) {
-				const isLast = s === ex.sets.length - 1;
-				steps.push({ exerciseIndex: i, setIndex: s, restSeconds: isLast ? 0 : ex.sets[s].restSeconds });
+				steps.push({ exerciseIndex: i, setIndex: s, restSeconds: ex.sets[s].restSeconds });
 			}
 		}
 	}
+	// No rest after the very last step of the workout
+	if (steps.length > 0) steps[steps.length - 1].restSeconds = 0;
 	return steps;
 }
 
@@ -439,7 +451,7 @@ export default class WorkoutTrackerPlugin extends Plugin {
 		const { workspace } = this.app;
 		let leaf = workspace.getLeavesOfType(VIEW_TYPE_TRACKER)[0];
 		if (!leaf) {
-			const newLeaf = workspace.getRightLeaf(false);
+			const newLeaf = Platform.isMobile ? workspace.getLeaf(false) : workspace.getRightLeaf(false);
 			if (!newLeaf) return;
 			leaf = newLeaf;
 			await leaf.setViewState({ type: VIEW_TYPE_TRACKER, active: true });
@@ -470,6 +482,7 @@ export default class WorkoutTrackerPlugin extends Plugin {
 			completedExercises: [], currentSetStartTime: Date.now(), restStartTime: 0,
 			currentReps: last?.reps ?? firstSet?.reps ?? 0,
 			currentWeight: last?.weight ?? firstSet?.weight ?? 0,
+			isPaused: false, pauseStartTime: 0, totalPausedMs: 0, stepHistory: [],
 		};
 	}
 
@@ -535,6 +548,9 @@ class WorkoutTrackerView extends ItemView {
 	private datalistId = 'wt-exercise-datalist-' + generateId();
 	private completedWorkout: CompletedWorkout | null = null;
 	private completedPRs: string[] = [];
+
+	// Home screen state
+	private expandedWorkoutIndex: number = -1;
 
 	// History/stats state
 	private historyTab: 'history' | 'stats' = 'history';
@@ -621,12 +637,13 @@ class WorkoutTrackerView extends ItemView {
 		const cardList = container.createDiv({ cls: 'wt-workout-cards' });
 
 		workouts.forEach((workout, idx) => {
-			const card = cardList.createDiv({ cls: 'wt-workout-card' });
+			const isExpanded = this.expandedWorkoutIndex === idx;
+			const card = cardList.createDiv({ cls: `wt-workout-card ${isExpanded ? 'wt-workout-card-expanded' : ''}` });
 
 			const cardBody = card.createDiv({ cls: 'wt-workout-card-body' });
 			cardBody.addEventListener('click', () => {
-				this.plugin.beginWorkout(workout);
-				if (this.plugin.activeState) this.navigateTo('active');
+				this.expandedWorkoutIndex = isExpanded ? -1 : idx;
+				this.render();
 			});
 
 			cardBody.createEl('div', { text: workout.name, cls: 'wt-workout-card-name' });
@@ -660,9 +677,36 @@ class WorkoutTrackerView extends ItemView {
 				lastRow.addClass('wt-muted');
 			}
 
-			// Start arrow
+			// Toggle arrow
 			const arrow = cardBody.createDiv({ cls: 'wt-workout-card-arrow' });
-			setIcon(arrow, 'play');
+			setIcon(arrow, isExpanded ? 'chevron-down' : 'play');
+
+			// ── Expanded preview ──────────────────────────────────────────
+			if (isExpanded) {
+				const preview = card.createDiv({ cls: 'wt-workout-preview' });
+				const unit = this.plugin.data.settings.weightUnit;
+
+				if (workout.exercises.length === 0) {
+					preview.createEl('p', { text: 'No exercises yet. Edit this workout to add some.', cls: 'wt-muted' });
+				} else {
+					workout.exercises.forEach((ex) => {
+						const exRow = preview.createDiv({ cls: 'wt-preview-exercise' });
+						exRow.createEl('span', { text: ex.name, cls: 'wt-preview-exercise-name' });
+						const setInfo = ex.sets.length > 0
+							? `${ex.sets.length} × ${ex.sets[0].reps} reps${ex.sets[0].weight > 0 ? ` @ ${ex.sets[0].weight} ${unit}` : ''}`
+							: `${ex.sets.length} sets`;
+						exRow.createEl('span', { text: setInfo, cls: 'wt-preview-exercise-meta' });
+						if (ex.modifier) exRow.createEl('span', { text: ex.modifier, cls: 'wt-preview-modifier' });
+					});
+				}
+
+				const startBtn = preview.createEl('button', { text: 'Start Workout', cls: 'wt-btn wt-btn-start wt-preview-start-btn' });
+				startBtn.addEventListener('click', (e) => {
+					e.stopPropagation();
+					this.plugin.beginWorkout(workout);
+					if (this.plugin.activeState) this.navigateTo('active');
+				});
+			}
 		});
 
 		// ── New workout button at bottom ─────────────────────────────────────
@@ -922,9 +966,15 @@ class WorkoutTrackerView extends ItemView {
 				const key = lastUsedKey(workout.name, exercise.name, setIdx);
 				const last = this.plugin.data.lastUsed[key];
 				const repsInput = row.createEl('td').createEl('input', { type: 'number', cls: 'wt-set-input', value: String(last?.reps ?? set.reps) });
-				repsInput.addEventListener('change', () => { set.reps = parseInt(repsInput.value) || 0; });
+				repsInput.addEventListener('change', () => {
+					set.reps = parseInt(repsInput.value) || 0;
+					this.plugin.data.lastUsed[key] = { reps: set.reps, weight: this.plugin.data.lastUsed[key]?.weight ?? set.weight };
+				});
 				const weightInput = row.createEl('td').createEl('input', { type: 'number', cls: 'wt-set-input', value: String(last?.weight ?? set.weight) });
-				weightInput.addEventListener('change', () => { set.weight = parseFloat(weightInput.value) || 0; });
+				weightInput.addEventListener('change', () => {
+					set.weight = parseFloat(weightInput.value) || 0;
+					this.plugin.data.lastUsed[key] = { reps: this.plugin.data.lastUsed[key]?.reps ?? set.reps, weight: set.weight };
+				});
 				const restInput = row.createEl('td').createEl('input', { type: 'number', cls: 'wt-set-input', value: String(set.restSeconds) });
 				restInput.addEventListener('change', () => { set.restSeconds = parseInt(restInput.value) || 0; });
 				const removeSetBtn = row.createEl('td').createEl('button', { text: '✕', cls: 'wt-btn-icon' });
@@ -989,7 +1039,16 @@ class WorkoutTrackerView extends ItemView {
 		const currentEx = step ? workout.exercises[step.exerciseIndex] : null;
 		const currentSet = currentEx && step ? currentEx.sets[step.setIndex] : null;
 
-		if (state.isResting) {
+		if (state.isPaused) {
+			// ── Paused state ──────────────────────────────────────────────
+			panel.addClass('wt-paused-panel');
+			panel.createEl('div', { text: 'PAUSED', cls: 'wt-paused-label' });
+			if (currentEx) {
+				panel.createEl('div', { text: `${currentEx.name} — Set ${step.setIndex + 1}`, cls: 'wt-set-title wt-muted' });
+			}
+			const resumeBtn = panel.createEl('button', { text: 'Resume', cls: 'wt-btn wt-btn-complete' });
+			resumeBtn.addEventListener('click', () => this.resumeWorkout());
+		} else if (state.isResting) {
 			panel.addClass('wt-rest-panel');
 			if (state.restRemaining < 0) panel.addClass('wt-rest-overtime');
 			panel.createEl('div', { text: 'Rest', cls: 'wt-rest-label' });
@@ -998,6 +1057,16 @@ class WorkoutTrackerView extends ItemView {
 			if (state.restRemaining < 0) restTimerEl.addClass('wt-timer-overtime');
 			const nextSetBtn = panel.createEl('button', { text: 'Start Next Set', cls: 'wt-btn wt-btn-complete' });
 			nextSetBtn.addEventListener('click', () => this.advanceFromRest());
+			// Controls during rest
+			const restControls = panel.createDiv({ cls: 'wt-controls-row' });
+			const pauseBtn = restControls.createEl('button', { text: 'Pause', cls: 'wt-btn wt-btn-sm' });
+			setIcon(pauseBtn, 'pause');
+			pauseBtn.addEventListener('click', () => this.pauseWorkout());
+			if (state.stepHistory.length > 0) {
+				const backBtn = restControls.createEl('button', { text: 'Back', cls: 'wt-btn wt-btn-sm' });
+				setIcon(backBtn, 'undo');
+				backBtn.addEventListener('click', () => this.goBackToLastSet());
+			}
 		} else if (currentEx && currentSet) {
 			panel.addClass('wt-set-panel');
 			if (currentEx.supersetGroupId) panel.createEl('div', { text: 'SUPERSET', cls: 'wt-ss-active-label' });
@@ -1021,13 +1090,46 @@ class WorkoutTrackerView extends ItemView {
 
 			const completeBtn = panel.createEl('button', { text: '✓ Complete Set', cls: 'wt-btn wt-btn-complete' });
 			completeBtn.addEventListener('click', () => this.completeCurrentSet());
+
+			// Controls row: Skip, Pause, Back
+			const controls = panel.createDiv({ cls: 'wt-controls-row' });
+			const skipBtn = controls.createEl('button', { text: ' Skip', cls: 'wt-btn wt-btn-sm' });
+			setIcon(skipBtn, 'skip-forward');
+			skipBtn.addEventListener('click', () => this.skipCurrentSet());
+			const pauseBtn = controls.createEl('button', { text: ' Pause', cls: 'wt-btn wt-btn-sm' });
+			setIcon(pauseBtn, 'pause');
+			pauseBtn.addEventListener('click', () => this.pauseWorkout());
+			if (state.stepHistory.length > 0) {
+				const backBtn = controls.createEl('button', { text: ' Back', cls: 'wt-btn wt-btn-sm' });
+				setIcon(backBtn, 'undo');
+				backBtn.addEventListener('click', () => this.goBackToLastSet());
+			}
 		}
 
+		// Immediate next set
 		const nextInfo = this.getNextSetInfo(state);
 		if (nextInfo) {
 			const nextCard = container.createDiv({ cls: 'wt-next-card' });
 			nextCard.createEl('span', { text: 'Next: ', cls: 'wt-next-label' });
 			nextCard.createEl('span', { text: nextInfo });
+		}
+
+		// Collapsible upcoming exercises list
+		const remainingSteps = state.steps.slice(state.currentStepIndex + 1);
+		if (remainingSteps.length > 0) {
+			const upcomingSection = container.createEl('details', { cls: 'wt-upcoming-section' });
+			upcomingSection.createEl('summary', { text: `Upcoming (${remainingSteps.length} set${remainingSteps.length !== 1 ? 's' : ''} remaining)` });
+			let lastExName = '';
+			for (const rs of remainingSteps) {
+				const ex = workout.exercises[rs.exerciseIndex];
+				const row = upcomingSection.createDiv({ cls: 'wt-upcoming-row' });
+				if (ex.name !== lastExName) {
+					row.addClass('wt-upcoming-new-exercise');
+					lastExName = ex.name;
+				}
+				row.createEl('span', { text: `${ex.name} — Set ${rs.setIndex + 1}` });
+				if (rs.restSeconds > 0) row.createEl('span', { text: `${rs.restSeconds}s rest`, cls: 'wt-muted' });
+			}
 		}
 
 		this.renderPreviousSets(container, state);
@@ -1068,7 +1170,7 @@ class WorkoutTrackerView extends ItemView {
 
 	private tickActiveTimer(): void {
 		const state = this.plugin.activeState;
-		if (!state) return;
+		if (!state || state.isPaused) return;
 		if (state.isResting) {
 			const restElapsed = Math.floor((Date.now() - state.restStartTime) / 1000);
 			const step = state.steps[state.currentStepIndex];
@@ -1106,6 +1208,7 @@ class WorkoutTrackerView extends ItemView {
 		let completedEx = state.completedExercises.find((e) => e.name === currentEx.name);
 		if (!completedEx) { completedEx = { name: currentEx.name, sets: [] }; state.completedExercises.push(completedEx); }
 		completedEx.sets.push(cs);
+		state.stepHistory.push({ stepIndex: state.currentStepIndex, completedSet: { ...cs }, exerciseName: currentEx.name });
 		if (state.currentStepIndex === state.steps.length - 1) { this.finishWorkout(); return; }
 		if (step.restSeconds > 0) {
 			state.isResting = true; state.restRemaining = step.restSeconds; state.restStartTime = Date.now(); this.restAlertFired = false; this.render();
@@ -1137,11 +1240,65 @@ class WorkoutTrackerView extends ItemView {
 		this.render();
 	}
 
+	private skipCurrentSet(): void {
+		const state = this.plugin.activeState;
+		if (!state) return;
+		if (state.currentStepIndex === state.steps.length - 1) {
+			this.finishWorkout();
+			return;
+		}
+		this.advanceToNextStep();
+	}
+
+	private pauseWorkout(): void {
+		const state = this.plugin.activeState;
+		if (!state || state.isPaused) return;
+		state.isPaused = true;
+		state.pauseStartTime = Date.now();
+		this.render();
+	}
+
+	private resumeWorkout(): void {
+		const state = this.plugin.activeState;
+		if (!state || !state.isPaused) return;
+		const pausedDuration = Date.now() - state.pauseStartTime;
+		state.totalPausedMs += pausedDuration;
+		// Shift timing origins so timers don't jump
+		state.currentSetStartTime += pausedDuration;
+		if (state.isResting) state.restStartTime += pausedDuration;
+		state.isPaused = false;
+		this.render();
+	}
+
+	private goBackToLastSet(): void {
+		const state = this.plugin.activeState;
+		if (!state || state.stepHistory.length === 0) return;
+		const lastEntry = state.stepHistory.pop()!;
+		// Remove the set from completedExercises
+		const cex = state.completedExercises.find((e) => e.name === lastEntry.exerciseName);
+		if (cex) {
+			cex.sets.pop();
+			if (cex.sets.length === 0) {
+				const idx = state.completedExercises.indexOf(cex);
+				state.completedExercises.splice(idx, 1);
+			}
+		}
+		// Go back to that step
+		state.currentStepIndex = lastEntry.stepIndex;
+		state.isResting = false;
+		state.currentReps = lastEntry.completedSet.reps;
+		state.currentWeight = lastEntry.completedSet.weight;
+		state.setElapsed = 0;
+		state.currentSetStartTime = Date.now();
+		this.restAlertFired = false;
+		this.render();
+	}
+
 	private async finishWorkout(): Promise<void> {
 		const state = this.plugin.activeState;
 		if (!state) return;
 		this.clearTimers();
-		const totalDuration = Math.floor((Date.now() - state.startTime) / 1000);
+		const totalDuration = Math.floor((Date.now() - state.startTime - state.totalPausedMs) / 1000);
 		const completed: CompletedWorkout = {
 			id: generateId(), workoutName: state.workout.name, date: new Date().toISOString(),
 			totalDurationSeconds: totalDuration, exercises: state.completedExercises,
@@ -1208,8 +1365,24 @@ class WorkoutTrackerView extends ItemView {
 			}
 		}
 
+		// Notes section
+		const notesSection = container.createDiv({ cls: 'wt-notes-section' });
+		notesSection.createEl('div', { text: 'Workout Notes', cls: 'wt-notes-heading' });
+		const notesInput = notesSection.createEl('textarea', { cls: 'wt-notes-input' });
+		notesInput.placeholder = 'How did you feel? Any notes about this session...';
+		notesInput.value = completed.notes || '';
+		notesInput.addEventListener('input', () => { completed.notes = notesInput.value; });
+
 		const returnBtn = container.createEl('button', { text: 'Done', cls: 'wt-btn wt-btn-primary wt-return-btn' });
-		returnBtn.addEventListener('click', () => { this.completedWorkout = null; this.completedPRs = []; this.navigateTo('home'); });
+		returnBtn.addEventListener('click', async () => {
+			// Save notes to the history entry
+			const historyEntry = this.plugin.data.history.find((h) => h.id === completed.id);
+			if (historyEntry && completed.notes) historyEntry.notes = completed.notes;
+			await this.plugin.savePluginData();
+			this.completedWorkout = null;
+			this.completedPRs = [];
+			this.navigateTo('home');
+		});
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════════
@@ -1309,6 +1482,11 @@ class WorkoutTrackerView extends ItemView {
 					line.setText(s.weight > 0 ? `Set ${si + 1}: ${s.reps} reps × ${s.weight} ${unit}` : `Set ${si + 1}: ${s.reps} reps (bodyweight)`);
 				});
 			});
+			if (entry.notes) {
+				const notesDiv = details.createDiv({ cls: 'wt-history-notes' });
+				notesDiv.createEl('strong', { text: 'Notes: ' });
+				notesDiv.createEl('span', { text: entry.notes, cls: 'wt-history-notes-text' });
+			}
 		});
 
 		if (totalPages > 1) {
@@ -1390,7 +1568,45 @@ class WorkoutTrackerView extends ItemView {
 			value: w.exercises.reduce((s, ex) => s + ex.sets.reduce((sv, st) => sv + st.reps * st.weight, 0), 0),
 		})), `Total Volume Over Time (${unit})`, unit, '#22c55e');
 
-		// Personal Records
+		// Exercise breakdown
+		const allNames = new Set<string>();
+		sorted.forEach((w) => w.exercises.forEach((ex) => allNames.add(ex.name)));
+		const exList = [...allNames].sort();
+		if (exList.length > 0) {
+			if (!this.selectedExercise || !allNames.has(this.selectedExercise)) this.selectedExercise = exList[0];
+			sc.createEl('div', { text: 'Exercise Breakdown', cls: 'wt-stats-section-title' });
+			const selRow = sc.createDiv({ cls: 'wt-stats-select-row' });
+			selRow.createEl('label', { text: 'Exercise:' });
+			const exSel = selRow.createEl('select', { cls: 'wt-workout-select' });
+			exList.forEach((n) => { const o = exSel.createEl('option', { text: n, value: n }); if (n === this.selectedExercise) o.selected = true; });
+			exSel.addEventListener('change', () => { this.selectedExercise = exSel.value; this.render(); });
+
+			const en = this.selectedExercise;
+			const sessions: { date: string; sets: number; maxWeight: number; totalReps: number; volume: number; avgReps: number; best1RM: number }[] = [];
+			sorted.forEach((w) => {
+				const matches = w.exercises.filter((e) => e.name === en);
+				if (matches.length === 0) return;
+				let sets = 0, maxW = 0, totR = 0, vol = 0, best1rm = 0;
+				matches.forEach((m) => m.sets.forEach((s) => {
+					sets++; if (s.weight > maxW) maxW = s.weight; totR += s.reps; vol += s.reps * s.weight;
+					const e1rm = estimate1RM(s.weight, s.reps); if (e1rm > best1rm) best1rm = e1rm;
+				}));
+				sessions.push({ date: w.date, sets, maxWeight: maxW, totalReps: totR, volume: vol, avgReps: sets > 0 ? Math.round(totR / sets) : 0, best1RM: best1rm });
+			});
+			const ecd = sc.createDiv({ cls: 'wt-ex-charts' });
+			if (sessions.length > 0) {
+				renderBarChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.sets })), `${en} — Sets Per Session`, 'Sets', '#f59e0b');
+				renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.maxWeight })), `${en} — Max Weight (${unit})`, unit, '#ef4444');
+				renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.totalReps })), `${en} — Total Reps`, 'Reps', '#3b82f6');
+				renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.volume })), `${en} — Volume (${unit})`, unit, '#22c55e');
+				renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.avgReps })), `${en} — Avg Reps/Set`, 'Reps', '#8b5cf6');
+				renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.best1RM })), `${en} — Est. 1RM (${unit})`, unit, '#ec4899');
+			} else {
+				ecd.createEl('p', { text: `No history for "${en}" in this period.`, cls: 'wt-empty-msg' });
+			}
+		}
+
+		// Personal Records (below exercise breakdown)
 		const prs = this.plugin.data.personalRecords;
 		const prNames = Object.keys(prs).sort();
 		if (prNames.length > 0) {
@@ -1407,41 +1623,6 @@ class WorkoutTrackerView extends ItemView {
 				if (pr.maxReps > 0) vals.createEl('span', { text: `Reps: ${pr.maxReps}`, cls: 'wt-pr-value-item' });
 			}
 		}
-
-		// Exercise breakdown
-		const allNames = new Set<string>();
-		sorted.forEach((w) => w.exercises.forEach((ex) => allNames.add(ex.name)));
-		const exList = [...allNames].sort();
-		if (exList.length === 0) return;
-		if (!this.selectedExercise || !allNames.has(this.selectedExercise)) this.selectedExercise = exList[0];
-		sc.createEl('div', { text: 'Exercise Breakdown', cls: 'wt-stats-section-title' });
-		const selRow = sc.createDiv({ cls: 'wt-stats-select-row' });
-		selRow.createEl('label', { text: 'Exercise:' });
-		const exSel = selRow.createEl('select', { cls: 'wt-workout-select' });
-		exList.forEach((n) => { const o = exSel.createEl('option', { text: n, value: n }); if (n === this.selectedExercise) o.selected = true; });
-		exSel.addEventListener('change', () => { this.selectedExercise = exSel.value; this.render(); });
-
-		const en = this.selectedExercise;
-		const sessions: { date: string; sets: number; maxWeight: number; totalReps: number; volume: number; avgReps: number; best1RM: number }[] = [];
-		sorted.forEach((w) => {
-			const matches = w.exercises.filter((e) => e.name === en);
-			if (matches.length === 0) return;
-			let sets = 0, maxW = 0, totR = 0, vol = 0, best1rm = 0;
-			matches.forEach((m) => m.sets.forEach((s) => {
-				sets++; if (s.weight > maxW) maxW = s.weight; totR += s.reps; vol += s.reps * s.weight;
-				const e1rm = estimate1RM(s.weight, s.reps); if (e1rm > best1rm) best1rm = e1rm;
-			}));
-			sessions.push({ date: w.date, sets, maxWeight: maxW, totalReps: totR, volume: vol, avgReps: sets > 0 ? Math.round(totR / sets) : 0, best1RM: best1rm });
-		});
-		const ecd = sc.createDiv({ cls: 'wt-ex-charts' });
-		if (sessions.length === 0) { ecd.createEl('p', { text: `No history for "${en}" in this period.`, cls: 'wt-empty-msg' }); return; }
-
-		renderBarChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.sets })), `${en} — Sets Per Session`, 'Sets', '#f59e0b');
-		renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.maxWeight })), `${en} — Max Weight (${unit})`, unit, '#ef4444');
-		renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.totalReps })), `${en} — Total Reps`, 'Reps', '#3b82f6');
-		renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.volume })), `${en} — Volume (${unit})`, unit, '#22c55e');
-		renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.avgReps })), `${en} — Avg Reps/Set`, 'Reps', '#8b5cf6');
-		renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.best1RM })), `${en} — Est. 1RM (${unit})`, unit, '#ec4899');
 	}
 }
 

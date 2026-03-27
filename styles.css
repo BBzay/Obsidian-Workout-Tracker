@@ -1249,3 +1249,174 @@
     font-size: 15px;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   WORKOUT PREVIEW (expanded card on home screen)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wt-workout-card-expanded {
+  border-color: var(--interactive-accent);
+}
+
+.wt-workout-preview {
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+}
+
+.wt-preview-exercise {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.wt-preview-exercise-name {
+  font-weight: 500;
+  flex: 1;
+  min-width: 80px;
+}
+
+.wt-preview-exercise-meta {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.wt-preview-modifier {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.wt-preview-start-btn {
+  width: 100%;
+  margin-top: 10px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   UPCOMING EXERCISES (active workout)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wt-upcoming-section {
+  margin-bottom: 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.wt-upcoming-section summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 8px 12px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  background: var(--background-secondary);
+}
+
+.wt-upcoming-section summary:hover {
+  background: var(--background-modifier-hover);
+}
+
+.wt-upcoming-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 12px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.wt-upcoming-row:last-child {
+  border-bottom: none;
+}
+
+.wt-upcoming-new-exercise {
+  border-top: 2px solid var(--interactive-accent);
+  margin-top: 2px;
+  padding-top: 6px;
+  font-weight: 500;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SKIP / PAUSE / BACK CONTROLS (active workout)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wt-controls-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.wt-controls-row .wt-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.wt-paused-panel {
+  background: var(--background-secondary) !important;
+  border-left: 4px solid var(--text-muted) !important;
+  text-align: center;
+}
+
+.wt-paused-label {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 4px;
+  margin-bottom: 8px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   WORKOUT NOTES (completion + history)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wt-notes-section {
+  width: 100%;
+  margin-bottom: 16px;
+}
+
+.wt-notes-heading {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+
+.wt-notes-input {
+  width: 100%;
+  min-height: 80px;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.wt-notes-input:focus {
+  border-color: var(--interactive-accent);
+  outline: none;
+}
+
+.wt-history-notes {
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--background-primary);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.wt-history-notes-text {
+  white-space: pre-wrap;
+  color: var(--text-muted);
+}

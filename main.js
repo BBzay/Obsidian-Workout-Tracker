@@ -108,11 +108,12 @@ function buildSteps(workout) {
     } else {
       processed.add(i);
       for (let s = 0; s < ex.sets.length; s++) {
-        const isLast = s === ex.sets.length - 1;
-        steps.push({ exerciseIndex: i, setIndex: s, restSeconds: isLast ? 0 : ex.sets[s].restSeconds });
+        steps.push({ exerciseIndex: i, setIndex: s, restSeconds: ex.sets[s].restSeconds });
       }
     }
   }
+  if (steps.length > 0)
+    steps[steps.length - 1].restSeconds = 0;
   return steps;
 }
 function shortDate(isoStr) {
@@ -411,7 +412,7 @@ var WorkoutTrackerPlugin = class extends import_obsidian.Plugin {
     const { workspace } = this.app;
     let leaf = workspace.getLeavesOfType(VIEW_TYPE_TRACKER)[0];
     if (!leaf) {
-      const newLeaf = workspace.getRightLeaf(false);
+      const newLeaf = import_obsidian.Platform.isMobile ? workspace.getLeaf(false) : workspace.getRightLeaf(false);
       if (!newLeaf)
         return;
       leaf = newLeaf;
@@ -456,7 +457,11 @@ var WorkoutTrackerPlugin = class extends import_obsidian.Plugin {
       currentSetStartTime: Date.now(),
       restStartTime: 0,
       currentReps: (_b = (_a = last == null ? void 0 : last.reps) != null ? _a : firstSet == null ? void 0 : firstSet.reps) != null ? _b : 0,
-      currentWeight: (_d = (_c = last == null ? void 0 : last.weight) != null ? _c : firstSet == null ? void 0 : firstSet.weight) != null ? _d : 0
+      currentWeight: (_d = (_c = last == null ? void 0 : last.weight) != null ? _c : firstSet == null ? void 0 : firstSet.weight) != null ? _d : 0,
+      isPaused: false,
+      pauseStartTime: 0,
+      totalPausedMs: 0,
+      stepHistory: []
     };
   }
   getAllExerciseNames() {
@@ -547,6 +552,8 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
     this.datalistId = "wt-exercise-datalist-" + generateId();
     this.completedWorkout = null;
     this.completedPRs = [];
+    // Home screen state
+    this.expandedWorkoutIndex = -1;
     // History/stats state
     this.historyTab = "history";
     this.statsTimeRange = "month";
@@ -643,12 +650,12 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
     }
     const cardList = container.createDiv({ cls: "wt-workout-cards" });
     workouts.forEach((workout, idx) => {
-      const card = cardList.createDiv({ cls: "wt-workout-card" });
+      const isExpanded = this.expandedWorkoutIndex === idx;
+      const card = cardList.createDiv({ cls: `wt-workout-card ${isExpanded ? "wt-workout-card-expanded" : ""}` });
       const cardBody = card.createDiv({ cls: "wt-workout-card-body" });
       cardBody.addEventListener("click", () => {
-        this.plugin.beginWorkout(workout);
-        if (this.plugin.activeState)
-          this.navigateTo("active");
+        this.expandedWorkoutIndex = isExpanded ? -1 : idx;
+        this.render();
       });
       cardBody.createEl("div", { text: workout.name, cls: "wt-workout-card-name" });
       const meta = cardBody.createDiv({ cls: "wt-workout-card-meta" });
@@ -674,7 +681,30 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
         lastRow.addClass("wt-muted");
       }
       const arrow = cardBody.createDiv({ cls: "wt-workout-card-arrow" });
-      (0, import_obsidian.setIcon)(arrow, "play");
+      (0, import_obsidian.setIcon)(arrow, isExpanded ? "chevron-down" : "play");
+      if (isExpanded) {
+        const preview = card.createDiv({ cls: "wt-workout-preview" });
+        const unit = this.plugin.data.settings.weightUnit;
+        if (workout.exercises.length === 0) {
+          preview.createEl("p", { text: "No exercises yet. Edit this workout to add some.", cls: "wt-muted" });
+        } else {
+          workout.exercises.forEach((ex) => {
+            const exRow = preview.createDiv({ cls: "wt-preview-exercise" });
+            exRow.createEl("span", { text: ex.name, cls: "wt-preview-exercise-name" });
+            const setInfo = ex.sets.length > 0 ? `${ex.sets.length} \xD7 ${ex.sets[0].reps} reps${ex.sets[0].weight > 0 ? ` @ ${ex.sets[0].weight} ${unit}` : ""}` : `${ex.sets.length} sets`;
+            exRow.createEl("span", { text: setInfo, cls: "wt-preview-exercise-meta" });
+            if (ex.modifier)
+              exRow.createEl("span", { text: ex.modifier, cls: "wt-preview-modifier" });
+          });
+        }
+        const startBtn = preview.createEl("button", { text: "Start Workout", cls: "wt-btn wt-btn-start wt-preview-start-btn" });
+        startBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.plugin.beginWorkout(workout);
+          if (this.plugin.activeState)
+            this.navigateTo("active");
+        });
+      }
     });
     const addBtn = container.createEl("button", { text: "+ New Workout", cls: "wt-btn wt-home-add-btn" });
     addBtn.addEventListener("click", async () => {
@@ -971,11 +1001,15 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
         const last = this.plugin.data.lastUsed[key];
         const repsInput = row.createEl("td").createEl("input", { type: "number", cls: "wt-set-input", value: String((_a = last == null ? void 0 : last.reps) != null ? _a : set.reps) });
         repsInput.addEventListener("change", () => {
+          var _a2, _b2;
           set.reps = parseInt(repsInput.value) || 0;
+          this.plugin.data.lastUsed[key] = { reps: set.reps, weight: (_b2 = (_a2 = this.plugin.data.lastUsed[key]) == null ? void 0 : _a2.weight) != null ? _b2 : set.weight };
         });
         const weightInput = row.createEl("td").createEl("input", { type: "number", cls: "wt-set-input", value: String((_b = last == null ? void 0 : last.weight) != null ? _b : set.weight) });
         weightInput.addEventListener("change", () => {
+          var _a2, _b2;
           set.weight = parseFloat(weightInput.value) || 0;
+          this.plugin.data.lastUsed[key] = { reps: (_b2 = (_a2 = this.plugin.data.lastUsed[key]) == null ? void 0 : _a2.reps) != null ? _b2 : set.reps, weight: set.weight };
         });
         const restInput = row.createEl("td").createEl("input", { type: "number", cls: "wt-set-input", value: String(set.restSeconds) });
         restInput.addEventListener("change", () => {
@@ -1060,7 +1094,15 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
     const step = state.steps[state.currentStepIndex];
     const currentEx = step ? workout.exercises[step.exerciseIndex] : null;
     const currentSet = currentEx && step ? currentEx.sets[step.setIndex] : null;
-    if (state.isResting) {
+    if (state.isPaused) {
+      panel.addClass("wt-paused-panel");
+      panel.createEl("div", { text: "PAUSED", cls: "wt-paused-label" });
+      if (currentEx) {
+        panel.createEl("div", { text: `${currentEx.name} \u2014 Set ${step.setIndex + 1}`, cls: "wt-set-title wt-muted" });
+      }
+      const resumeBtn = panel.createEl("button", { text: "Resume", cls: "wt-btn wt-btn-complete" });
+      resumeBtn.addEventListener("click", () => this.resumeWorkout());
+    } else if (state.isResting) {
       panel.addClass("wt-rest-panel");
       if (state.restRemaining < 0)
         panel.addClass("wt-rest-overtime");
@@ -1071,6 +1113,15 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
         restTimerEl.addClass("wt-timer-overtime");
       const nextSetBtn = panel.createEl("button", { text: "Start Next Set", cls: "wt-btn wt-btn-complete" });
       nextSetBtn.addEventListener("click", () => this.advanceFromRest());
+      const restControls = panel.createDiv({ cls: "wt-controls-row" });
+      const pauseBtn = restControls.createEl("button", { text: "Pause", cls: "wt-btn wt-btn-sm" });
+      (0, import_obsidian.setIcon)(pauseBtn, "pause");
+      pauseBtn.addEventListener("click", () => this.pauseWorkout());
+      if (state.stepHistory.length > 0) {
+        const backBtn = restControls.createEl("button", { text: "Back", cls: "wt-btn wt-btn-sm" });
+        (0, import_obsidian.setIcon)(backBtn, "undo");
+        backBtn.addEventListener("click", () => this.goBackToLastSet());
+      }
     } else if (currentEx && currentSet) {
       panel.addClass("wt-set-panel");
       if (currentEx.supersetGroupId)
@@ -1096,12 +1147,41 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
       setElapsedValue.dataset.role = "setElapsed";
       const completeBtn = panel.createEl("button", { text: "\u2713 Complete Set", cls: "wt-btn wt-btn-complete" });
       completeBtn.addEventListener("click", () => this.completeCurrentSet());
+      const controls = panel.createDiv({ cls: "wt-controls-row" });
+      const skipBtn = controls.createEl("button", { text: " Skip", cls: "wt-btn wt-btn-sm" });
+      (0, import_obsidian.setIcon)(skipBtn, "skip-forward");
+      skipBtn.addEventListener("click", () => this.skipCurrentSet());
+      const pauseBtn = controls.createEl("button", { text: " Pause", cls: "wt-btn wt-btn-sm" });
+      (0, import_obsidian.setIcon)(pauseBtn, "pause");
+      pauseBtn.addEventListener("click", () => this.pauseWorkout());
+      if (state.stepHistory.length > 0) {
+        const backBtn = controls.createEl("button", { text: " Back", cls: "wt-btn wt-btn-sm" });
+        (0, import_obsidian.setIcon)(backBtn, "undo");
+        backBtn.addEventListener("click", () => this.goBackToLastSet());
+      }
     }
     const nextInfo = this.getNextSetInfo(state);
     if (nextInfo) {
       const nextCard = container.createDiv({ cls: "wt-next-card" });
       nextCard.createEl("span", { text: "Next: ", cls: "wt-next-label" });
       nextCard.createEl("span", { text: nextInfo });
+    }
+    const remainingSteps = state.steps.slice(state.currentStepIndex + 1);
+    if (remainingSteps.length > 0) {
+      const upcomingSection = container.createEl("details", { cls: "wt-upcoming-section" });
+      upcomingSection.createEl("summary", { text: `Upcoming (${remainingSteps.length} set${remainingSteps.length !== 1 ? "s" : ""} remaining)` });
+      let lastExName = "";
+      for (const rs of remainingSteps) {
+        const ex = workout.exercises[rs.exerciseIndex];
+        const row = upcomingSection.createDiv({ cls: "wt-upcoming-row" });
+        if (ex.name !== lastExName) {
+          row.addClass("wt-upcoming-new-exercise");
+          lastExName = ex.name;
+        }
+        row.createEl("span", { text: `${ex.name} \u2014 Set ${rs.setIndex + 1}` });
+        if (rs.restSeconds > 0)
+          row.createEl("span", { text: `${rs.restSeconds}s rest`, cls: "wt-muted" });
+      }
     }
     this.renderPreviousSets(container, state);
     this.startActiveTimer();
@@ -1146,7 +1226,7 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
   tickActiveTimer() {
     var _a;
     const state = this.plugin.activeState;
-    if (!state)
+    if (!state || state.isPaused)
       return;
     if (state.isResting) {
       const restElapsed = Math.floor((Date.now() - state.restStartTime) / 1e3);
@@ -1191,6 +1271,7 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
       state.completedExercises.push(completedEx);
     }
     completedEx.sets.push(cs);
+    state.stepHistory.push({ stepIndex: state.currentStepIndex, completedSet: { ...cs }, exerciseName: currentEx.name });
     if (state.currentStepIndex === state.steps.length - 1) {
       this.finishWorkout();
       return;
@@ -1235,12 +1316,64 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
     this.restAlertFired = false;
     this.render();
   }
+  skipCurrentSet() {
+    const state = this.plugin.activeState;
+    if (!state)
+      return;
+    if (state.currentStepIndex === state.steps.length - 1) {
+      this.finishWorkout();
+      return;
+    }
+    this.advanceToNextStep();
+  }
+  pauseWorkout() {
+    const state = this.plugin.activeState;
+    if (!state || state.isPaused)
+      return;
+    state.isPaused = true;
+    state.pauseStartTime = Date.now();
+    this.render();
+  }
+  resumeWorkout() {
+    const state = this.plugin.activeState;
+    if (!state || !state.isPaused)
+      return;
+    const pausedDuration = Date.now() - state.pauseStartTime;
+    state.totalPausedMs += pausedDuration;
+    state.currentSetStartTime += pausedDuration;
+    if (state.isResting)
+      state.restStartTime += pausedDuration;
+    state.isPaused = false;
+    this.render();
+  }
+  goBackToLastSet() {
+    const state = this.plugin.activeState;
+    if (!state || state.stepHistory.length === 0)
+      return;
+    const lastEntry = state.stepHistory.pop();
+    const cex = state.completedExercises.find((e) => e.name === lastEntry.exerciseName);
+    if (cex) {
+      cex.sets.pop();
+      if (cex.sets.length === 0) {
+        const idx = state.completedExercises.indexOf(cex);
+        state.completedExercises.splice(idx, 1);
+      }
+    }
+    state.currentStepIndex = lastEntry.stepIndex;
+    state.isResting = false;
+    state.currentReps = lastEntry.completedSet.reps;
+    state.currentWeight = lastEntry.completedSet.weight;
+    state.setElapsed = 0;
+    state.currentSetStartTime = Date.now();
+    this.restAlertFired = false;
+    this.render();
+  }
   async finishWorkout() {
     const state = this.plugin.activeState;
     if (!state)
       return;
     this.clearTimers();
-    const totalDuration = Math.floor((Date.now() - state.startTime) / 1e3);
+    const totalDuration = Math.floor((Date.now() - state.startTime - state.totalPausedMs) / 1e3);
     const completed = {
       id: generateId(),
       workoutName: state.workout.name,
@@ -1317,8 +1450,20 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
         prItem.createEl("span", { text: pr });
       }
     }
+    const notesSection = container.createDiv({ cls: "wt-notes-section" });
+    notesSection.createEl("div", { text: "Workout Notes", cls: "wt-notes-heading" });
+    const notesInput = notesSection.createEl("textarea", { cls: "wt-notes-input" });
+    notesInput.placeholder = "How did you feel? Any notes about this session...";
+    notesInput.value = completed.notes || "";
+    notesInput.addEventListener("input", () => {
+      completed.notes = notesInput.value;
+    });
     const returnBtn = container.createEl("button", { text: "Done", cls: "wt-btn wt-btn-primary wt-return-btn" });
-    returnBtn.addEventListener("click", () => {
+    returnBtn.addEventListener("click", async () => {
+      const historyEntry = this.plugin.data.history.find((h) => h.id === completed.id);
+      if (historyEntry && completed.notes)
+        historyEntry.notes = completed.notes;
+      await this.plugin.savePluginData();
       this.completedWorkout = null;
       this.completedPRs = [];
       this.navigateTo("home");
@@ -1435,6 +1580,11 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
           line.setText(s.weight > 0 ? `Set ${si + 1}: ${s.reps} reps \xD7 ${s.weight} ${unit}` : `Set ${si + 1}: ${s.reps} reps (bodyweight)`);
         });
       });
+      if (entry.notes) {
+        const notesDiv = details.createDiv({ cls: "wt-history-notes" });
+        notesDiv.createEl("strong", { text: "Notes: " });
+        notesDiv.createEl("span", { text: entry.notes, cls: "wt-history-notes-text" });
+      }
     });
     if (totalPages > 1) {
       const pagRow = container.createDiv({ cls: "wt-pagination-row" });
@@ -1537,6 +1687,56 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
       label: shortDate(w.date),
       value: w.exercises.reduce((s, ex) => s + ex.sets.reduce((sv, st) => sv + st.reps * st.weight, 0), 0)
     })), `Total Volume Over Time (${unit})`, unit, "#22c55e");
+    const allNames = /* @__PURE__ */ new Set();
+    sorted.forEach((w) => w.exercises.forEach((ex) => allNames.add(ex.name)));
+    const exList = [...allNames].sort();
+    if (exList.length > 0) {
+      if (!this.selectedExercise || !allNames.has(this.selectedExercise))
+        this.selectedExercise = exList[0];
+      sc.createEl("div", { text: "Exercise Breakdown", cls: "wt-stats-section-title" });
+      const selRow = sc.createDiv({ cls: "wt-stats-select-row" });
+      selRow.createEl("label", { text: "Exercise:" });
+      const exSel = selRow.createEl("select", { cls: "wt-workout-select" });
+      exList.forEach((n) => {
+        const o = exSel.createEl("option", { text: n, value: n });
+        if (n === this.selectedExercise)
+          o.selected = true;
+      });
+      exSel.addEventListener("change", () => {
+        this.selectedExercise = exSel.value;
+        this.render();
+      });
+      const en = this.selectedExercise;
+      const sessions = [];
+      sorted.forEach((w) => {
+        const matches = w.exercises.filter((e) => e.name === en);
+        if (matches.length === 0)
+          return;
+        let sets = 0, maxW = 0, totR = 0, vol = 0, best1rm = 0;
+        matches.forEach((m) => m.sets.forEach((s) => {
+          sets++;
+          if (s.weight > maxW)
+            maxW = s.weight;
+          totR += s.reps;
+          vol += s.reps * s.weight;
+          const e1rm = estimate1RM(s.weight, s.reps);
+          if (e1rm > best1rm)
+            best1rm = e1rm;
+        }));
+        sessions.push({ date: w.date, sets, maxWeight: maxW, totalReps: totR, volume: vol, avgReps: sets > 0 ? Math.round(totR / sets) : 0, best1RM: best1rm });
+      });
+      const ecd = sc.createDiv({ cls: "wt-ex-charts" });
+      if (sessions.length > 0) {
+        renderBarChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.sets })), `${en} \u2014 Sets Per Session`, "Sets", "#f59e0b");
+        renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.maxWeight })), `${en} \u2014 Max Weight (${unit})`, unit, "#ef4444");
+        renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.totalReps })), `${en} \u2014 Total Reps`, "Reps", "#3b82f6");
+        renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.volume })), `${en} \u2014 Volume (${unit})`, unit, "#22c55e");
+        renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.avgReps })), `${en} \u2014 Avg Reps/Set`, "Reps", "#8b5cf6");
+        renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.best1RM })), `${en} \u2014 Est. 1RM (${unit})`, unit, "#ec4899");
+      } else {
+        ecd.createEl("p", { text: `No history for "${en}" in this period.`, cls: "wt-empty-msg" });
+      }
+    }
     const prs = this.plugin.data.personalRecords;
     const prNames = Object.keys(prs).sort();
     if (prNames.length > 0) {
@@ -1557,56 +1757,6 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
           vals.createEl("span", { text: `Reps: ${pr.maxReps}`, cls: "wt-pr-value-item" });
       }
     }
-    const allNames = /* @__PURE__ */ new Set();
-    sorted.forEach((w) => w.exercises.forEach((ex) => allNames.add(ex.name)));
-    const exList = [...allNames].sort();
-    if (exList.length === 0)
-      return;
-    if (!this.selectedExercise || !allNames.has(this.selectedExercise))
-      this.selectedExercise = exList[0];
-    sc.createEl("div", { text: "Exercise Breakdown", cls: "wt-stats-section-title" });
-    const selRow = sc.createDiv({ cls: "wt-stats-select-row" });
-    selRow.createEl("label", { text: "Exercise:" });
-    const exSel = selRow.createEl("select", { cls: "wt-workout-select" });
-    exList.forEach((n) => {
-      const o = exSel.createEl("option", { text: n, value: n });
-      if (n === this.selectedExercise)
-        o.selected = true;
-    });
-    exSel.addEventListener("change", () => {
-      this.selectedExercise = exSel.value;
-      this.render();
-    });
-    const en = this.selectedExercise;
-    const sessions = [];
-    sorted.forEach((w) => {
-      const matches = w.exercises.filter((e) => e.name === en);
-      if (matches.length === 0)
-        return;
-      let sets = 0, maxW = 0, totR = 0, vol = 0, best1rm = 0;
-      matches.forEach((m) => m.sets.forEach((s) => {
-        sets++;
-        if (s.weight > maxW)
-          maxW = s.weight;
-        totR += s.reps;
-        vol += s.reps * s.weight;
-        const e1rm = estimate1RM(s.weight, s.reps);
-        if (e1rm > best1rm)
-          best1rm = e1rm;
-      }));
-      sessions.push({ date: w.date, sets, maxWeight: maxW, totalReps: totR, volume: vol, avgReps: sets > 0 ? Math.round(totR / sets) : 0, best1RM: best1rm });
-    });
-    const ecd = sc.createDiv({ cls: "wt-ex-charts" });
-    if (sessions.length === 0) {
-      ecd.createEl("p", { text: `No history for "${en}" in this period.`, cls: "wt-empty-msg" });
-      return;
-    }
-    renderBarChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.sets })), `${en} \u2014 Sets Per Session`, "Sets", "#f59e0b");
-    renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.maxWeight })), `${en} \u2014 Max Weight (${unit})`, unit, "#ef4444");
-    renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.totalReps })), `${en} \u2014 Total Reps`, "Reps", "#3b82f6");
-    renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.volume })), `${en} \u2014 Volume (${unit})`, unit, "#22c55e");
-    renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.avgReps })), `${en} \u2014 Avg Reps/Set`, "Reps", "#8b5cf6");
-    renderLineChart(ecd, sessions.map((s) => ({ label: shortDate(s.date), value: s.best1RM })), `${en} \u2014 Est. 1RM (${unit})`, unit, "#ec4899");
   }
 };
 function renderLineChart(container, points, title, yLabel, color = "#6366f1") {
