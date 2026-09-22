@@ -418,6 +418,13 @@
   flex: 1;
 }
 
+.wt-total-time {
+  flex-basis: 100%;
+  order: 2;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ─── Progress Bar ─────────────────────────────────────────────────────────── */
 
 .wt-progress-container {
@@ -1420,3 +1427,8 @@
   white-space: pre-wrap;
   color: var(--text-muted);
 }
+
+/* Keep available exercises reachable during a lift. */
+.wt-exercise-navigation { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.wt-exercise-navigation .wt-btn { white-space: normal; text-align: left; min-height: 40px; }
+.wt-upcoming-section { max-height: 340px; overflow-y: auto; }

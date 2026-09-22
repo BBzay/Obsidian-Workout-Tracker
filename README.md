@@ -105,3 +105,19 @@ The build outputs `main.js` in the project root.
 ## License
 
 MIT
+
+## 1.4.0 changes
+
+Start Workout waits for Start Set. Upcoming exercises stay expanded with Choose/Do next controls that reorder only unfinished sets. Finish or skip a running set before switching. Start Next Set explicitly starts timing; other transitions return to ready. Pause/Back/Skip are preserved. `npm run build` and `node test-active.cjs` validate the build and active-state regressions. Included in the 1.5.0 BRAT release.
+
+## 1.5.0 changes
+
+Finishing a workout now writes one sentence to that day's daily-note Log immediately, with the workout name, completed set count, up to four exercise names and exact time spent. Time runs from Start Workout to completion, includes rests and preparation, and excludes pauses (including ending while paused). No manual text entry or Atlas command is required.
+
+Startup, imported history and externally synced plugin data also synchronize summaries. Failed daily-note writes keep workout history intact and retry every minute while Obsidian is open; the Sync workout summaries to daily notes command repairs/backfills entries on demand. Stable workout markers update older Atlas entries without duplicates; existing Atlas, frontmatter and Journal prose stay untouched. Defaults use Journal/YYYY-MM-DD.md and Home/Templates/Daily note.md, configurable in Workout Ledger settings. New sessions retain their local completion date/time across time zones. Active sessions remain in memory as before; finish before reloading.
+
+Validation: `npm run build`, `node test-active.cjs`, `node test-daily.cjs`, `node --check main.js`. Published through BRAT. After completing any active workout, run BRAT update check, restart Obsidian and confirm version 1.5.0. Actual phone operation requires device verification.
+
+## Release delivery
+
+Commit reviewed source and generated package with matching manifest/package version and versions.json entry. Push a matching version tag; GitHub Actions tests, rebuilds and publishes the three BRAT assets, then verifies public downloads. Local installs alone do not update other devices. Never publish settings, personal workout history or vault notes.

@@ -1,0 +1,2 @@
+# Preserve release bytes across checkout platforms for SHA-256 verification.
+* -text

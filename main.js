@@ -28,9 +28,142 @@ __export(main_exports, {
   default: () => WorkoutTrackerPlugin
 });
 module.exports = __toCommonJS(main_exports);
+var import_obsidian2 = require("obsidian");
+
+// src/daily-note.ts
 var import_obsidian = require("obsidian");
+function plain(value) {
+  return value.replace(/[\r\n\t]+/g, " ").replace(/[<>\[\]`*_\\]/g, "").replace(/\s+/g, " ").trim();
+}
+function workoutLogLine(workout) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(workout.id))
+    throw new Error("Invalid workout ID");
+  if (!Number.isFinite(workout.totalDurationSeconds) || workout.totalDurationSeconds < 0)
+    throw new Error("Invalid workout duration");
+  const seconds = Math.floor(workout.totalDurationSeconds);
+  const hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60), rest = seconds % 60;
+  const duration = [hours ? `${hours} hr` : "", minutes ? `${minutes} min` : "", rest || !seconds ? `${rest} sec` : ""].filter(Boolean).join(" ");
+  const exercises = workout.exercises.filter((ex) => ex.sets.length > 0);
+  const sets = exercises.reduce((count, ex) => count + ex.sets.length, 0);
+  const names = exercises.slice(0, 4).map((ex) => plain(ex.name) || "unnamed exercise").join(", ");
+  const extra = exercises.length > 4 ? ` and ${exercises.length - 4} more` : "";
+  const detail = sets ? `${sets} completed set${sets === 1 ? "" : "s"} across ${names}${extra}` : "no completed sets";
+  const time = /^\d{2}:\d{2}$/.test(workout.dailyNoteTime || "") ? workout.dailyNoteTime : (0, import_obsidian.moment)(workout.date).format("HH:mm");
+  return `- ${time} workout: ${plain(workout.workoutName) || "Workout"} \u2014 ${detail} in ${duration}. <!-- workout-ledger:${workout.id} -->`;
+}
+function headings(text) {
+  const result = [];
+  let offset = 0, fence = "";
+  for (const line of text.match(/[^\n]*(?:\n|$)/g) || []) {
+    const match = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (match) {
+      if (!fence)
+        fence = match[1];
+      else if (match[1][0] === fence[0] && match[1].length >= fence.length)
+        fence = "";
+    } else if (!fence) {
+      const heading = /^##[ \t]+(.+?)[ \t]*\r?\n?$/.exec(line);
+      if (heading)
+        result.push({ title: heading[1], start: offset, end: offset + line.length });
+    }
+    offset += line.length;
+  }
+  return result;
+}
+function upsertWorkoutLog(text, workout) {
+  var _a, _b, _c;
+  const line = workoutLogLine(workout);
+  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  const sections = headings(text);
+  const journal = sections.find((h) => h.title === "Journal");
+  const boundary = (_a = journal == null ? void 0 : journal.start) != null ? _a : text.length;
+  const log = sections.find((h) => h.title === "Log" && h.start < boundary);
+  if (!log) {
+    const prefix = text.slice(0, boundary);
+    return prefix + (prefix.endsWith(newline + newline) || !prefix ? "" : prefix.endsWith(newline) ? newline : newline + newline) + `## Log${newline}${newline}${line}${newline}${newline}` + text.slice(boundary);
+  }
+  const end = (_c = (_b = sections.find((h) => h.start > log.start)) == null ? void 0 : _b.start) != null ? _c : text.length;
+  const body = text.slice(log.end, end);
+  const marker = `<!-- workout-ledger:${workout.id} -->`;
+  let found = false;
+  const lines = body.split(/\r?\n/).filter((existing) => {
+    if (!existing.startsWith("- ") || !existing.trimEnd().endsWith(marker))
+      return true;
+    if (found)
+      return false;
+    found = true;
+    return true;
+  }).map((existing) => existing.startsWith("- ") && existing.trimEnd().endsWith(marker) ? line : existing);
+  let replacement = lines.join(newline);
+  if (!found)
+    replacement = replacement.trimEnd() + `${newline}${line}${newline}${newline}`;
+  return text.slice(0, log.end) + replacement + text.slice(end);
+}
+function safePath(path) {
+  const raw = path.trim().replace(/\\/g, "/");
+  if (!raw || raw.startsWith("/") || raw.split("/").some((part) => part === ".." || part.startsWith(".") || /[:<>|?*]/.test(part)) || /^Private(?:\/|$)/i.test(raw)) {
+    throw new Error("Choose a visible vault-relative path");
+  }
+  return (0, import_obsidian.normalizePath)(raw);
+}
+async function writeWorkoutDailyNote(app, workout, folder, templatePath) {
+  const date = (0, import_obsidian.moment)(workout.date, import_obsidian.moment.ISO_8601, true);
+  if (!date.isValid())
+    throw new Error("Invalid workout date");
+  workoutLogLine(workout);
+  const day = workout.dailyNoteDate || date.format("YYYY-MM-DD");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !(0, import_obsidian.moment)(day, "YYYY-MM-DD", true).isValid())
+    throw new Error("Invalid daily-note date");
+  const path = `${safePath(folder)}/${day}.md`;
+  let file = app.vault.getAbstractFileByPath(path);
+  if (!file) {
+    const template = app.vault.getAbstractFileByPath(safePath(templatePath));
+    let body = template instanceof import_obsidian.TFile ? await app.vault.read(template) : `# ${day}
+
+## Atlas
+
+## Log
+
+## Journal
+`;
+    const localDate = (0, import_obsidian.moment)(day, "YYYY-MM-DD");
+    body = body.replace(/\{\{date:([^}]+)\}\}/g, (_, format) => localDate.format(format)).replace(/\{\{date\}\}/g, day);
+    const parts = safePath(folder).split("/");
+    for (let i = 1; i <= parts.length; i++) {
+      const parent = parts.slice(0, i).join("/");
+      if (!app.vault.getAbstractFileByPath(parent)) {
+        try {
+          await app.vault.createFolder(parent);
+        } catch (error) {
+          if (!app.vault.getAbstractFileByPath(parent))
+            throw error;
+        }
+      }
+    }
+    try {
+      file = await app.vault.create(path, body);
+    } catch (error) {
+      file = app.vault.getAbstractFileByPath(path);
+      if (!(file instanceof import_obsidian.TFile))
+        throw error;
+    }
+  }
+  if (!(file instanceof import_obsidian.TFile))
+    throw new Error("Daily-note path is not a file");
+  let changed = false;
+  await app.vault.process(file, (current) => {
+    const next = upsertWorkoutLog(current, workout);
+    changed = next !== current;
+    return next;
+  });
+  return changed;
+}
+
+// src/main.ts
 var VIEW_TYPE_TRACKER = "workout-ledger-view";
 var DEFAULT_SETTINGS = {
+  dailyNoteFolder: "Journal",
+  dailyNoteTemplate: "Home/Templates/Daily note.md",
   weightUnit: "lbs",
   defaultRestSeconds: 60,
   restTimerSound: true,
@@ -53,6 +186,10 @@ function formatTime(totalSeconds) {
   const s = Math.floor(abs % 60);
   const sign = totalSeconds < 0 ? "-" : "";
   return `${sign}${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+function workoutElapsedSeconds(state, now = Date.now()) {
+  const end = state.isPaused ? state.pauseStartTime : now;
+  return Math.max(0, Math.floor((end - state.startTime - state.totalPausedMs) / 1e3));
 }
 function formatDurationShort(totalSeconds) {
   const h = Math.floor(totalSeconds / 3600);
@@ -257,7 +394,7 @@ function vibrateDevice() {
   } catch (e) {
   }
 }
-var ConfirmModal = class extends import_obsidian.Modal {
+var ConfirmModal = class extends import_obsidian2.Modal {
   constructor(app, message, onConfirm) {
     super(app);
     this.message = message;
@@ -279,7 +416,7 @@ var ConfirmModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 };
-var RenameModal = class extends import_obsidian.Modal {
+var RenameModal = class extends import_obsidian2.Modal {
   constructor(app, currentName, onSubmit) {
     super(app);
     this.currentName = currentName;
@@ -289,12 +426,12 @@ var RenameModal = class extends import_obsidian.Modal {
     const { contentEl } = this;
     contentEl.createEl("h3", { text: "Rename Workout" });
     let newName = this.currentName;
-    new import_obsidian.Setting(contentEl).setName("New name").addText(
+    new import_obsidian2.Setting(contentEl).setName("New name").addText(
       (text) => text.setValue(this.currentName).onChange((v) => {
         newName = v;
       })
     );
-    new import_obsidian.Setting(contentEl).addButton(
+    new import_obsidian2.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("Rename").setCta().onClick(() => {
         if (newName.trim()) {
           this.onSubmit(newName.trim());
@@ -307,7 +444,7 @@ var RenameModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 };
-var SupersetModal = class extends import_obsidian.Modal {
+var SupersetModal = class extends import_obsidian2.Modal {
   constructor(app, exercises, onSubmit) {
     super(app);
     this.selected = /* @__PURE__ */ new Set();
@@ -338,7 +475,7 @@ var SupersetModal = class extends import_obsidian.Modal {
     const createBtn = btnRow.createEl("button", { text: "Create Superset", cls: "mod-cta" });
     createBtn.addEventListener("click", () => {
       if (this.selected.size < 2) {
-        new import_obsidian.Notice("Select at least 2 exercises.");
+        new import_obsidian2.Notice("Select at least 2 exercises.");
         return;
       }
       this.onSubmit([...this.selected].sort((a, b) => a - b));
@@ -349,7 +486,7 @@ var SupersetModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 };
-var UpdateWorkoutModal = class extends import_obsidian.Modal {
+var UpdateWorkoutModal = class extends import_obsidian2.Modal {
   constructor(app, workoutName, onUpdate, onSkip) {
     super(app);
     this.workoutName = workoutName;
@@ -375,11 +512,14 @@ var UpdateWorkoutModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 };
-var WorkoutTrackerPlugin = class extends import_obsidian.Plugin {
+var WorkoutTrackerPlugin = class extends import_obsidian2.Plugin {
   constructor() {
     super(...arguments);
     this.data = DEFAULT_DATA;
     this.activeState = null;
+    this.dailySync = Promise.resolve();
+    this.pendingDailyNotes = /* @__PURE__ */ new Set();
+    this.dailySyncWarning = false;
   }
   async onload() {
     await this.loadPluginData();
@@ -388,8 +528,14 @@ var WorkoutTrackerPlugin = class extends import_obsidian.Plugin {
     this.addRibbonIcon("dumbbell", "Open Workout Ledger", () => this.activateView());
     this.addCommand({ id: "open-workout-ledger", name: "Open Workout Ledger", callback: () => this.activateView() });
     this.addCommand({ id: "start-last-workout", name: "Start Last Workout", callback: () => this.startLastWorkout() });
+    this.addCommand({ id: "sync-daily-notes", name: "Sync workout summaries to daily notes", callback: () => this.syncDailyNotes(false) });
     this.app.workspace.onLayoutReady(() => {
+      void this.syncDailyNotes();
     });
+    this.registerInterval(window.setInterval(() => {
+      if (this.pendingDailyNotes.size)
+        void this.syncDailyNotes(true, true);
+    }, 6e4));
   }
   onunload() {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_TRACKER);
@@ -408,11 +554,39 @@ var WorkoutTrackerPlugin = class extends import_obsidian.Plugin {
   async savePluginData() {
     await this.saveData(this.data);
   }
+  async onExternalSettingsChange() {
+    await this.loadPluginData();
+    await this.syncDailyNotes();
+  }
+  async syncDailyNotes(quiet = true, retryOnly = false) {
+    const run = async () => {
+      let changed = 0, failures = 0;
+      for (const workout of this.data.history) {
+        if (retryOnly && !this.pendingDailyNotes.has(workout.id))
+          continue;
+        try {
+          if (await writeWorkoutDailyNote(this.app, workout, this.data.settings.dailyNoteFolder, this.data.settings.dailyNoteTemplate))
+            changed++;
+          this.pendingDailyNotes.delete(workout.id);
+        } catch (e) {
+          this.pendingDailyNotes.add(workout.id);
+          failures++;
+        }
+      }
+      if (failures && (!quiet || !this.dailySyncWarning))
+        new import_obsidian2.Notice("Workout history is saved, but daily-note sync failed; retrying automatically. Check the daily-note paths in Workout Ledger settings.");
+      else if (!quiet && !failures)
+        new import_obsidian2.Notice(`Workout summaries synced: ${changed} updated.`);
+      this.dailySyncWarning = failures > 0;
+    };
+    this.dailySync = this.dailySync.then(run, run);
+    await this.dailySync;
+  }
   async activateView() {
     const { workspace } = this.app;
     let leaf = workspace.getLeavesOfType(VIEW_TYPE_TRACKER)[0];
     if (!leaf) {
-      const newLeaf = import_obsidian.Platform.isMobile ? workspace.getLeaf(false) : workspace.getRightLeaf(false);
+      const newLeaf = import_obsidian2.Platform.isMobile ? workspace.getLeaf(false) : workspace.getRightLeaf(false);
       if (!newLeaf)
         return;
       leaf = newLeaf;
@@ -422,7 +596,7 @@ var WorkoutTrackerPlugin = class extends import_obsidian.Plugin {
   }
   async startLastWorkout() {
     if (this.data.workouts.length === 0) {
-      new import_obsidian.Notice("No workout templates saved yet.");
+      new import_obsidian2.Notice("No workout templates saved yet.");
       return;
     }
     const workout = this.data.workouts[this.data.workouts.length - 1];
@@ -432,12 +606,12 @@ var WorkoutTrackerPlugin = class extends import_obsidian.Plugin {
   beginWorkout(workout) {
     var _a, _b, _c, _d;
     if (workout.exercises.length === 0) {
-      new import_obsidian.Notice("This workout has no exercises. Add some first!");
+      new import_obsidian2.Notice("This workout has no exercises. Add some first!");
       return;
     }
     const steps = buildSteps(workout);
     if (steps.length === 0) {
-      new import_obsidian.Notice("No sets to do!");
+      new import_obsidian2.Notice("No sets to do!");
       return;
     }
     const firstStep = steps[0];
@@ -450,6 +624,8 @@ var WorkoutTrackerPlugin = class extends import_obsidian.Plugin {
       startTime: Date.now(),
       steps,
       currentStepIndex: 0,
+      setStarted: false,
+      setDrafts: {},
       isResting: false,
       restRemaining: 0,
       setElapsed: 0,
@@ -541,9 +717,10 @@ var WorkoutTrackerPlugin = class extends import_obsidian.Plugin {
     return null;
   }
 };
-var WorkoutTrackerView = class extends import_obsidian.ItemView {
+var WorkoutTrackerView = class extends import_obsidian2.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
+    this.finishingWorkout = false;
     this.screen = "home";
     this.editWorkoutIndex = 0;
     this.timerIntervalId = null;
@@ -624,14 +801,14 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
     topBar.createEl("h3", { text: "Workouts", cls: "wt-home-title" });
     const topActions = topBar.createDiv({ cls: "wt-home-actions" });
     const historyBtn = topActions.createEl("button", { cls: "wt-btn wt-btn-sm" });
-    (0, import_obsidian.setIcon)(historyBtn, "history");
+    (0, import_obsidian2.setIcon)(historyBtn, "history");
     historyBtn.setAttribute("title", "History & Stats");
     historyBtn.addEventListener("click", () => {
       this.historyTab = "history";
       this.navigateTo("history");
     });
     const editBtn = topActions.createEl("button", { cls: "wt-btn wt-btn-sm" });
-    (0, import_obsidian.setIcon)(editBtn, "pencil");
+    (0, import_obsidian2.setIcon)(editBtn, "pencil");
     editBtn.setAttribute("title", "Edit Workouts");
     editBtn.addEventListener("click", () => this.navigateTo("edit"));
     const workouts = this.plugin.data.workouts;
@@ -681,7 +858,7 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
         lastRow.addClass("wt-muted");
       }
       const arrow = cardBody.createDiv({ cls: "wt-workout-card-arrow" });
-      (0, import_obsidian.setIcon)(arrow, isExpanded ? "chevron-down" : "play");
+      (0, import_obsidian2.setIcon)(arrow, isExpanded ? "chevron-down" : "play");
       if (isExpanded) {
         const preview = card.createDiv({ cls: "wt-workout-preview" });
         const unit = this.plugin.data.settings.weightUnit;
@@ -722,7 +899,7 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
     container.addClass("wt-edit-mode");
     const topBar = container.createDiv({ cls: "wt-topbar" });
     const backBtn = topBar.createEl("button", { cls: "wt-btn wt-btn-sm wt-back-btn" });
-    (0, import_obsidian.setIcon)(backBtn, "arrow-left");
+    (0, import_obsidian2.setIcon)(backBtn, "arrow-left");
     backBtn.createEl("span", { text: " Back" });
     backBtn.addEventListener("click", () => this.navigateTo("home"));
     topBar.createEl("span", { text: "Edit Workouts", cls: "wt-topbar-title" });
@@ -861,7 +1038,7 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
     const saveBtn = bottomRow.createEl("button", { text: "Save", cls: "wt-btn wt-btn-primary" });
     saveBtn.addEventListener("click", async () => {
       await this.plugin.savePluginData();
-      new import_obsidian.Notice(`Workout "${workout.name}" saved.`);
+      new import_obsidian2.Notice(`Workout "${workout.name}" saved.`);
     });
     const startBtn = bottomRow.createEl("button", { text: "\u25B6 Start Workout", cls: "wt-btn wt-btn-start" });
     startBtn.addEventListener("click", async () => {
@@ -932,7 +1109,7 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
       exHeader.createEl("span", { cls: "wt-drag-handle", text: "\u283F" }).setAttribute("title", "Drag to reorder");
       if (exIdx > 0) {
         const upBtn = exHeader.createEl("button", { cls: "wt-btn-icon wt-move-btn" });
-        (0, import_obsidian.setIcon)(upBtn, "chevron-up");
+        (0, import_obsidian2.setIcon)(upBtn, "chevron-up");
         upBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
           let prevIdx = exIdx - 1;
@@ -947,7 +1124,7 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
       }
       if (exIdx < workout.exercises.length - 1) {
         const downBtn = exHeader.createEl("button", { cls: "wt-btn-icon wt-move-btn" });
-        (0, import_obsidian.setIcon)(downBtn, "chevron-down");
+        (0, import_obsidian2.setIcon)(downBtn, "chevron-down");
         downBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
           let nextIdx = exIdx + 1;
@@ -1081,6 +1258,7 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
     const total = state.steps.length;
     const header = container.createDiv({ cls: "wt-active-header" });
     header.createEl("span", { text: workout.name, cls: "wt-active-title" });
+    header.createEl("span", { text: `Time spent: ${formatTime(workoutElapsedSeconds(state))}`, cls: "wt-total-time" });
     const endBtn = header.createEl("button", { text: "End", cls: "wt-btn wt-btn-danger wt-btn-sm" });
     endBtn.addEventListener("click", () => {
       new ConfirmModal(this.app, "End this workout early?", () => this.finishWorkout()).open();
@@ -1115,11 +1293,11 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
       nextSetBtn.addEventListener("click", () => this.advanceFromRest());
       const restControls = panel.createDiv({ cls: "wt-controls-row" });
       const pauseBtn = restControls.createEl("button", { text: "Pause", cls: "wt-btn wt-btn-sm" });
-      (0, import_obsidian.setIcon)(pauseBtn, "pause");
+      (0, import_obsidian2.setIcon)(pauseBtn, "pause");
       pauseBtn.addEventListener("click", () => this.pauseWorkout());
       if (state.stepHistory.length > 0) {
         const backBtn = restControls.createEl("button", { text: "Back", cls: "wt-btn wt-btn-sm" });
-        (0, import_obsidian.setIcon)(backBtn, "undo");
+        (0, import_obsidian2.setIcon)(backBtn, "undo");
         backBtn.addEventListener("click", () => this.goBackToLastSet());
       }
     } else if (currentEx && currentSet) {
@@ -1145,18 +1323,18 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
       const setElapsedEl = panel.createDiv({ cls: "wt-set-elapsed" });
       const setElapsedValue = setElapsedEl.createEl("span", { cls: "wt-timer-value", text: formatTime(state.setElapsed) });
       setElapsedValue.dataset.role = "setElapsed";
-      const completeBtn = panel.createEl("button", { text: "\u2713 Complete Set", cls: "wt-btn wt-btn-complete" });
-      completeBtn.addEventListener("click", () => this.completeCurrentSet());
+      const completeBtn = panel.createEl("button", { text: state.setStarted ? "\u2713 Complete Set" : "Start Set", cls: "wt-btn wt-btn-complete" });
+      completeBtn.addEventListener("click", () => state.setStarted ? this.completeCurrentSet() : this.startCurrentSet());
       const controls = panel.createDiv({ cls: "wt-controls-row" });
       const skipBtn = controls.createEl("button", { text: " Skip", cls: "wt-btn wt-btn-sm" });
-      (0, import_obsidian.setIcon)(skipBtn, "skip-forward");
+      (0, import_obsidian2.setIcon)(skipBtn, "skip-forward");
       skipBtn.addEventListener("click", () => this.skipCurrentSet());
       const pauseBtn = controls.createEl("button", { text: " Pause", cls: "wt-btn wt-btn-sm" });
-      (0, import_obsidian.setIcon)(pauseBtn, "pause");
+      (0, import_obsidian2.setIcon)(pauseBtn, "pause");
       pauseBtn.addEventListener("click", () => this.pauseWorkout());
       if (state.stepHistory.length > 0) {
         const backBtn = controls.createEl("button", { text: " Back", cls: "wt-btn wt-btn-sm" });
-        (0, import_obsidian.setIcon)(backBtn, "undo");
+        (0, import_obsidian2.setIcon)(backBtn, "undo");
         backBtn.addEventListener("click", () => this.goBackToLastSet());
       }
     }
@@ -1169,7 +1347,15 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
     const remainingSteps = state.steps.slice(state.currentStepIndex + 1);
     if (remainingSteps.length > 0) {
       const upcomingSection = container.createEl("details", { cls: "wt-upcoming-section" });
+      upcomingSection.open = true;
       upcomingSection.createEl("summary", { text: `Upcoming (${remainingSteps.length} set${remainingSteps.length !== 1 ? "s" : ""} remaining)` });
+      upcomingSection.createEl("p", { text: state.setStarted && !state.isResting ? "Finish or skip the current set to choose another exercise." : "Choose an available exercise. Other unfinished sets stay in the queue.", cls: "wt-muted" });
+      const navigation = upcomingSection.createDiv({ cls: "wt-exercise-navigation" });
+      for (const exerciseIndex of [...new Set(remainingSteps.map((s) => s.exerciseIndex))]) {
+        const choose = navigation.createEl("button", { text: `${state.isResting ? "Do next" : "Choose"}: ${workout.exercises[exerciseIndex].name}`, cls: "wt-btn wt-btn-sm" });
+        choose.disabled = state.isPaused || state.setStarted && !state.isResting;
+        this.registerDomEvent(choose, "click", () => this.chooseExercise(exerciseIndex));
+      }
       let lastExName = "";
       for (const rs of remainingSteps) {
         const ex = workout.exercises[rs.exerciseIndex];
@@ -1224,10 +1410,11 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
     this.timerIntervalId = this.registerInterval(window.setInterval(() => this.tickActiveTimer(), 1e3));
   }
   tickActiveTimer() {
-    var _a;
+    var _a, _b;
     const state = this.plugin.activeState;
     if (!state || state.isPaused)
       return;
+    (_a = this.contentEl.querySelector(".wt-total-time")) == null ? void 0 : _a.setText(`Time spent: ${formatTime(workoutElapsedSeconds(state))}`);
     if (state.isResting) {
       const restElapsed = Math.floor((Date.now() - state.restStartTime) / 1e3);
       const step = state.steps[state.currentStepIndex];
@@ -1237,7 +1424,7 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
         this.restAlertFired = true;
         if (this.plugin.data.settings.restTimerSound)
           playRestBeep();
-        if (this.plugin.data.settings.restTimerVibrate && import_obsidian.Platform.isMobile)
+        if (this.plugin.data.settings.restTimerVibrate && import_obsidian2.Platform.isMobile)
           vibrateDevice();
       }
       const restTimerEl = this.contentEl.querySelector(".wt-big-timer");
@@ -1245,10 +1432,10 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
         restTimerEl.setText(formatTime(state.restRemaining));
         if (state.restRemaining < 0) {
           restTimerEl.addClass("wt-timer-overtime");
-          (_a = this.contentEl.querySelector(".wt-current-panel")) == null ? void 0 : _a.addClass("wt-rest-overtime");
+          (_b = this.contentEl.querySelector(".wt-current-panel")) == null ? void 0 : _b.addClass("wt-rest-overtime");
         }
       }
-    } else {
+    } else if (state.setStarted) {
       state.setElapsed = Math.floor((Date.now() - state.currentSetStartTime) / 1e3);
       const el = this.contentEl.querySelector('[data-role="setElapsed"]');
       if (el)
@@ -1257,8 +1444,10 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
   }
   async completeCurrentSet() {
     const state = this.plugin.activeState;
-    if (!state)
+    if (!state || !state.setStarted || state.isResting || state.isPaused)
       return;
+    state.setStarted = false;
+    state.setElapsed = Math.floor((Date.now() - state.currentSetStartTime) / 1e3);
     const step = state.steps[state.currentStepIndex];
     const currentEx = state.workout.exercises[step.exerciseIndex];
     const cs = { reps: state.currentReps, weight: state.currentWeight, setSeconds: state.setElapsed, actualRestSeconds: 0 };
@@ -1290,31 +1479,69 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
     const state = this.plugin.activeState;
     if (!state)
       return;
-    const lastCex = state.completedExercises[state.completedExercises.length - 1];
+    const lastEntry = state.stepHistory[state.stepHistory.length - 1];
+    const lastCex = state.completedExercises.find((e) => e.name === (lastEntry == null ? void 0 : lastEntry.exerciseName));
     if (lastCex && lastCex.sets.length > 0)
       lastCex.sets[lastCex.sets.length - 1].actualRestSeconds = Math.floor((Date.now() - state.restStartTime) / 1e3);
     state.isResting = false;
     this.advanceToNextStep();
+    this.startCurrentSet();
   }
   advanceToNextStep() {
-    var _a, _b, _c, _d;
     const state = this.plugin.activeState;
     if (!state)
       return;
     state.currentStepIndex++;
     if (state.currentStepIndex >= state.steps.length)
       return;
-    const nextStep = state.steps[state.currentStepIndex];
-    const nextEx = state.workout.exercises[nextStep.exerciseIndex];
-    const nextSet = nextEx.sets[nextStep.setIndex];
-    const key = lastUsedKey(state.workout.name, nextEx.name, nextStep.setIndex);
-    const last = this.plugin.data.lastUsed[key];
-    state.currentReps = (_b = (_a = last == null ? void 0 : last.reps) != null ? _a : nextSet == null ? void 0 : nextSet.reps) != null ? _b : 0;
-    state.currentWeight = (_d = (_c = last == null ? void 0 : last.weight) != null ? _c : nextSet == null ? void 0 : nextSet.weight) != null ? _d : 0;
+    this.prepareCurrentSet();
+  }
+  prepareCurrentSet() {
+    var _a, _b, _c, _d, _e;
+    const state = this.plugin.activeState;
+    if (!state)
+      return;
+    const step = state.steps[state.currentStepIndex];
+    if (!step)
+      return;
+    const ex = state.workout.exercises[step.exerciseIndex];
+    const set = ex.sets[step.setIndex];
+    const previous = (_a = state.setDrafts[`${step.exerciseIndex}:${step.setIndex}`]) != null ? _a : this.plugin.data.lastUsed[lastUsedKey(state.workout.name, ex.name, step.setIndex)];
+    state.currentReps = (_c = (_b = previous == null ? void 0 : previous.reps) != null ? _b : set == null ? void 0 : set.reps) != null ? _c : 0;
+    state.currentWeight = (_e = (_d = previous == null ? void 0 : previous.weight) != null ? _d : set == null ? void 0 : set.weight) != null ? _e : 0;
+    state.setStarted = false;
     state.setElapsed = 0;
-    state.currentSetStartTime = Date.now();
+    state.currentSetStartTime = 0;
     this.restAlertFired = false;
     this.render();
+  }
+  startCurrentSet() {
+    const state = this.plugin.activeState;
+    if (!state || state.setStarted || state.isPaused || state.isResting)
+      return;
+    state.setStarted = true;
+    state.setElapsed = 0;
+    state.currentSetStartTime = Date.now();
+    this.render();
+  }
+  chooseExercise(exerciseIndex) {
+    const state = this.plugin.activeState;
+    if (!state || state.isPaused || state.setStarted && !state.isResting)
+      return;
+    const start = state.currentStepIndex + (state.isResting ? 1 : 0);
+    const pending = state.steps.slice(start);
+    const chosen = pending.filter((s) => s.exerciseIndex === exerciseIndex);
+    if (!chosen.length)
+      return;
+    if (!state.isResting) {
+      const step = state.steps[state.currentStepIndex];
+      state.setDrafts[`${step.exerciseIndex}:${step.setIndex}`] = { reps: state.currentReps, weight: state.currentWeight };
+    }
+    state.steps.splice(start, pending.length, ...chosen, ...pending.filter((s) => s.exerciseIndex !== exerciseIndex));
+    if (state.isResting)
+      this.render();
+    else
+      this.prepareCurrentSet();
   }
   skipCurrentSet() {
     const state = this.plugin.activeState;
@@ -1364,61 +1591,79 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
     state.currentReps = lastEntry.completedSet.reps;
     state.currentWeight = lastEntry.completedSet.weight;
     state.setElapsed = 0;
-    state.currentSetStartTime = Date.now();
+    state.currentSetStartTime = 0;
+    state.setStarted = false;
     this.restAlertFired = false;
     this.render();
   }
   async finishWorkout() {
     const state = this.plugin.activeState;
-    if (!state)
+    if (!state || this.finishingWorkout)
       return;
-    this.clearTimers();
-    const totalDuration = Math.floor((Date.now() - state.startTime - state.totalPausedMs) / 1e3);
-    const completed = {
-      id: generateId(),
-      workoutName: state.workout.name,
-      date: (/* @__PURE__ */ new Date()).toISOString(),
-      totalDurationSeconds: totalDuration,
-      exercises: state.completedExercises
-    };
-    const prDescriptions = this.plugin.checkAndUpdatePRs(completed);
-    if (prDescriptions.length > 0)
-      completed.prs = prDescriptions;
-    this.plugin.data.history.push(completed);
-    await this.plugin.savePluginData();
-    const template = this.plugin.data.workouts.find((w) => w.name === completed.workoutName);
-    this.plugin.activeState = null;
-    this.completedWorkout = completed;
-    this.completedPRs = prDescriptions;
-    if (template) {
-      new UpdateWorkoutModal(
-        this.app,
-        completed.workoutName,
-        async () => {
-          for (const cex of completed.exercises) {
-            const tmplEx = template.exercises.find((e) => e.name === cex.name);
-            if (!tmplEx)
-              continue;
-            cex.sets.forEach((cs, si) => {
-              if (si < tmplEx.sets.length) {
-                tmplEx.sets[si].reps = cs.reps;
-                tmplEx.sets[si].weight = cs.weight;
-              }
-            });
+    this.finishingWorkout = true;
+    try {
+      this.clearTimers();
+      const finishedAt = /* @__PURE__ */ new Date();
+      const totalDuration = workoutElapsedSeconds(state, finishedAt.getTime());
+      const completed = {
+        id: generateId(),
+        workoutName: state.workout.name,
+        date: finishedAt.toISOString(),
+        dailyNoteDate: `${finishedAt.getFullYear()}-${String(finishedAt.getMonth() + 1).padStart(2, "0")}-${String(finishedAt.getDate()).padStart(2, "0")}`,
+        dailyNoteTime: `${String(finishedAt.getHours()).padStart(2, "0")}:${String(finishedAt.getMinutes()).padStart(2, "0")}`,
+        totalDurationSeconds: totalDuration,
+        exercises: state.completedExercises
+      };
+      const prDescriptions = this.plugin.checkAndUpdatePRs(completed);
+      if (prDescriptions.length > 0)
+        completed.prs = prDescriptions;
+      this.plugin.data.history.push(completed);
+      try {
+        await this.plugin.savePluginData();
+      } catch (e) {
+        this.plugin.data.history = this.plugin.data.history.filter((entry) => entry.id !== completed.id);
+        this.plugin.rebuildAllPRs();
+        new import_obsidian2.Notice("Could not save this workout. Your active session is still open; try End again.");
+        this.render();
+        return;
+      }
+      const template = this.plugin.data.workouts.find((w) => w.name === completed.workoutName);
+      this.plugin.activeState = null;
+      this.completedWorkout = completed;
+      this.completedPRs = prDescriptions;
+      if (template) {
+        new UpdateWorkoutModal(
+          this.app,
+          completed.workoutName,
+          async () => {
+            for (const cex of completed.exercises) {
+              const tmplEx = template.exercises.find((e) => e.name === cex.name);
+              if (!tmplEx)
+                continue;
+              cex.sets.forEach((cs, si) => {
+                if (si < tmplEx.sets.length) {
+                  tmplEx.sets[si].reps = cs.reps;
+                  tmplEx.sets[si].weight = cs.weight;
+                }
+              });
+            }
+            template.lastUpdatedDurationSeconds = totalDuration;
+            await this.plugin.savePluginData();
+            new import_obsidian2.Notice("Workout template updated!");
+            this.navigateTo("completion");
+          },
+          () => {
+            this.navigateTo("completion");
           }
-          template.lastUpdatedDurationSeconds = totalDuration;
-          await this.plugin.savePluginData();
-          new import_obsidian.Notice("Workout template updated!");
-          this.navigateTo("completion");
-        },
-        () => {
-          this.navigateTo("completion");
-        }
-      ).open();
-    } else {
-      this.navigateTo("completion");
+        ).open();
+      } else {
+        this.navigateTo("completion");
+      }
+      new import_obsidian2.Notice(`Workout "${completed.workoutName}" completed!`);
+      await this.plugin.syncDailyNotes();
+    } finally {
+      this.finishingWorkout = false;
     }
-    new import_obsidian.Notice(`Workout "${completed.workoutName}" completed!`);
   }
   // ═══════════════════════════════════════════════════════════════════════════
   // COMPLETION SCREEN
@@ -1477,7 +1722,7 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
     container.addClass("wt-history");
     const topBar = container.createDiv({ cls: "wt-topbar" });
     const backBtn = topBar.createEl("button", { cls: "wt-btn wt-btn-sm wt-back-btn" });
-    (0, import_obsidian.setIcon)(backBtn, "arrow-left");
+    (0, import_obsidian2.setIcon)(backBtn, "arrow-left");
     backBtn.createEl("span", { text: " Back" });
     backBtn.addEventListener("click", () => this.navigateTo("home"));
     const tabBar = container.createDiv({ cls: "wt-tab-bar" });
@@ -1632,7 +1877,7 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
       const navRow = timeControls.createDiv({ cls: "wt-time-nav" });
       const earlierData = filterHistoryByRange(history, this.statsTimeRange, this.statsTimeOffset - 1);
       const leftBtn = navRow.createEl("button", { cls: "wt-btn wt-nav-arrow" });
-      (0, import_obsidian.setIcon)(leftBtn, "chevron-left");
+      (0, import_obsidian2.setIcon)(leftBtn, "chevron-left");
       if (earlierData.length === 0)
         leftBtn.disabled = true;
       leftBtn.addEventListener("click", () => {
@@ -1641,7 +1886,7 @@ var WorkoutTrackerView = class extends import_obsidian.ItemView {
       });
       navRow.createEl("span", { text: getPeriodLabel(this.statsTimeRange, this.statsTimeOffset), cls: "wt-time-period-label" });
       const rightBtn = navRow.createEl("button", { cls: "wt-btn wt-nav-arrow" });
-      (0, import_obsidian.setIcon)(rightBtn, "chevron-right");
+      (0, import_obsidian2.setIcon)(rightBtn, "chevron-right");
       if (this.statsTimeOffset >= 0)
         rightBtn.disabled = true;
       rightBtn.addEventListener("click", () => {
@@ -1902,7 +2147,7 @@ function renderBarChart(container, points, title, yLabel, color = "#22c55e") {
   });
   chartDiv.appendChild(svg);
 }
-var WorkoutSettingTab = class extends import_obsidian.PluginSettingTab {
+var WorkoutSettingTab = class extends import_obsidian2.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -1911,13 +2156,30 @@ var WorkoutSettingTab = class extends import_obsidian.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Workout Ledger Settings" });
-    new import_obsidian.Setting(containerEl).setName("Weight unit").setDesc("Cosmetic label shown next to weight fields.").addDropdown(
+    new import_obsidian2.Setting(containerEl).setName("Daily-note folder").setDesc("Completed workouts automatically add a one-sentence rundown and time spent to Log. Pauses are excluded.").addText(
+      (text) => text.setValue(this.plugin.data.settings.dailyNoteFolder).onChange(async (value) => {
+        this.plugin.data.settings.dailyNoteFolder = value.trim();
+        await this.plugin.savePluginData();
+      })
+    );
+    new import_obsidian2.Setting(containerEl).setName("Daily-note template").setDesc("Vault-relative template path, used only when the daily note does not exist.").addText(
+      (text) => text.setValue(this.plugin.data.settings.dailyNoteTemplate).onChange(async (value) => {
+        this.plugin.data.settings.dailyNoteTemplate = value.trim();
+        await this.plugin.savePluginData();
+      })
+    );
+    new import_obsidian2.Setting(containerEl).setName("Sync workout summaries").setDesc("Repair or backfill daily Log entries from saved history without duplicating workouts.").addButton(
+      (button) => button.setButtonText("Sync now").onClick(() => {
+        void this.plugin.syncDailyNotes(false);
+      })
+    );
+    new import_obsidian2.Setting(containerEl).setName("Weight unit").setDesc("Cosmetic label shown next to weight fields.").addDropdown(
       (dd) => dd.addOption("lbs", "lbs").addOption("kg", "kg").setValue(this.plugin.data.settings.weightUnit).onChange(async (v) => {
         this.plugin.data.settings.weightUnit = v;
         await this.plugin.savePluginData();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Default rest time (seconds)").setDesc("Rest duration used when adding new sets.").addText(
+    new import_obsidian2.Setting(containerEl).setName("Default rest time (seconds)").setDesc("Rest duration used when adding new sets.").addText(
       (text) => text.setValue(String(this.plugin.data.settings.defaultRestSeconds)).onChange(async (v) => {
         const n = parseInt(v);
         if (!isNaN(n) && n >= 0) {
@@ -1926,45 +2188,45 @@ var WorkoutSettingTab = class extends import_obsidian.PluginSettingTab {
         }
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Rest timer sound").setDesc("Play a beep when rest timer reaches zero.").addToggle(
+    new import_obsidian2.Setting(containerEl).setName("Rest timer sound").setDesc("Play a beep when rest timer reaches zero.").addToggle(
       (toggle) => toggle.setValue(this.plugin.data.settings.restTimerSound).onChange(async (v) => {
         this.plugin.data.settings.restTimerSound = v;
         await this.plugin.savePluginData();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Rest timer vibration").setDesc("Vibrate on mobile when rest timer reaches zero.").addToggle(
+    new import_obsidian2.Setting(containerEl).setName("Rest timer vibration").setDesc("Vibrate on mobile when rest timer reaches zero.").addToggle(
       (toggle) => toggle.setValue(this.plugin.data.settings.restTimerVibrate).onChange(async (v) => {
         this.plugin.data.settings.restTimerVibrate = v;
         await this.plugin.savePluginData();
       })
     );
     containerEl.createEl("h3", { text: "Personal Records" });
-    new import_obsidian.Setting(containerEl).setName("Rebuild PRs").setDesc("Recalculate all personal records from workout history.").addButton(
+    new import_obsidian2.Setting(containerEl).setName("Rebuild PRs").setDesc("Recalculate all personal records from workout history.").addButton(
       (btn) => btn.setButtonText("Rebuild").onClick(async () => {
         this.plugin.rebuildAllPRs();
         await this.plugin.savePluginData();
-        new import_obsidian.Notice("Personal records rebuilt from history.");
+        new import_obsidian2.Notice("Personal records rebuilt from history.");
       })
     );
     containerEl.createEl("h3", { text: "Data Management" });
-    new import_obsidian.Setting(containerEl).setName("Export data").setDesc("Export all workouts, history, and stats to a JSON file in your vault.").addButton(
+    new import_obsidian2.Setting(containerEl).setName("Export data").setDesc("Export all workouts, history, and stats to a JSON file in your vault.").addButton(
       (btn) => btn.setButtonText("Export").onClick(async () => {
         const exportData = JSON.parse(JSON.stringify(this.plugin.data));
         const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
         const fileName = `workout-ledger-export-${timestamp}.json`;
         const content = JSON.stringify(exportData, null, 2);
         await this.app.vault.create(fileName, content);
-        new import_obsidian.Notice(`Data exported to ${fileName}`);
+        new import_obsidian2.Notice(`Data exported to ${fileName}`);
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Import data").setDesc("Import workouts, history, and stats from a previously exported JSON file.").addButton(
+    new import_obsidian2.Setting(containerEl).setName("Import data").setDesc("Import workouts, history, and stats from a previously exported JSON file.").addButton(
       (btn) => btn.setButtonText("Import").onClick(() => {
         new ImportDataModal(this.app, this.plugin).open();
       })
     );
   }
 };
-var ImportDataModal = class extends import_obsidian.Modal {
+var ImportDataModal = class extends import_obsidian2.Modal {
   constructor(app, plugin) {
     super(app);
     this.plugin = plugin;
@@ -1995,14 +2257,14 @@ var ImportDataModal = class extends import_obsidian.Modal {
       const path = fileSelect.value;
       const file = this.app.vault.getAbstractFileByPath(path);
       if (!file || !("extension" in file)) {
-        new import_obsidian.Notice("File not found.");
+        new import_obsidian2.Notice("File not found.");
         return;
       }
       try {
         const content = await this.app.vault.read(file);
         await this.doImport(content);
       } catch (e) {
-        new import_obsidian.Notice("Failed to read file: " + e.message);
+        new import_obsidian2.Notice("Failed to read file: " + e.message);
       }
     });
     const uploadSection = contentEl.createDiv({ cls: "wt-import-section" });
@@ -2018,7 +2280,7 @@ var ImportDataModal = class extends import_obsidian.Modal {
     importPasteBtn.addEventListener("click", async () => {
       const content = textArea.value.trim();
       if (!content) {
-        new import_obsidian.Notice("Please paste JSON data first.");
+        new import_obsidian2.Notice("Please paste JSON data first.");
         return;
       }
       await this.doImport(content);
@@ -2040,11 +2302,11 @@ var ImportDataModal = class extends import_obsidian.Modal {
     try {
       imported = JSON.parse(content);
     } catch (e) {
-      new import_obsidian.Notice("Invalid JSON data. Please check the file contents.");
+      new import_obsidian2.Notice("Invalid JSON data. Please check the file contents.");
       return;
     }
     if (!imported.workouts || !Array.isArray(imported.workouts) || !imported.history || !Array.isArray(imported.history)) {
-      new import_obsidian.Notice("Invalid data format. Expected workout ledger export data.");
+      new import_obsidian2.Notice("Invalid data format. Expected workout ledger export data.");
       return;
     }
     const mode = this.modeSelect.value;
@@ -2078,7 +2340,8 @@ var ImportDataModal = class extends import_obsidian.Modal {
       leaf.view.render();
     }
     const count = mode === "replace" ? `Replaced with ${imported.workouts.length} workouts and ${imported.history.length} history entries.` : `Merged data. Check your workouts and history.`;
-    new import_obsidian.Notice(`Import complete! ${count}`);
+    new import_obsidian2.Notice(`Import complete! ${count}`);
+    await this.plugin.syncDailyNotes();
     this.close();
   }
   onClose() {

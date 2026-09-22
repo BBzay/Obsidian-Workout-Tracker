@@ -1,0 +1,28 @@
+name: BRAT release
+on:
+  push:
+    tags:
+      - '[0-9]*'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check version and package
+        run: |
+          node -e "const m=require('./manifest.json'); if(process.env.GITHUB_REF_TYPE!=='tag'||process.env.GITHUB_REF_NAME!==m.version) throw Error('Run from a tag matching manifest.version'); if(require('./versions.json')[m.version]!==m.minAppVersion) throw Error('Compatibility entry missing')"
+          node --check main.js
+          if [ -f package.json ]; then npm ci; npm test; npm run build; git diff --exit-code -- main.js; else node test.cjs; fi
+      - name: Publish stable BRAT assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css --verify-tag --title "$GITHUB_REF_NAME" --notes "Validated plugin package. See README for installation, changes and device acceptance."
+      - name: Verify public downloads
+        run: python scripts/verify-release.py "$GITHUB_REPOSITORY" .

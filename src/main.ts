@@ -10,6 +10,7 @@ import {
 	WorkspaceLeaf,
 	setIcon,
 } from 'obsidian';
+import { writeWorkoutDailyNote } from './daily-note';
 
 // ─── View Type Constants ─────────────────────────────────────────────────────
 
@@ -58,6 +59,8 @@ interface CompletedWorkout {
 	id: string;
 	workoutName: string;
 	date: string;
+	dailyNoteDate?: string;
+	dailyNoteTime?: string;
 	totalDurationSeconds: number;
 	exercises: CompletedExercise[];
 	prs?: string[];
@@ -76,6 +79,8 @@ interface PRRecord {
 }
 
 interface PluginSettings {
+	dailyNoteFolder: string;
+	dailyNoteTemplate: string;
 	weightUnit: 'lbs' | 'kg';
 	defaultRestSeconds: number;
 	restTimerSound: boolean;
@@ -91,6 +96,8 @@ interface PluginData {
 }
 
 const DEFAULT_SETTINGS: PluginSettings = {
+	dailyNoteFolder: 'Journal',
+	dailyNoteTemplate: 'Home/Templates/Daily note.md',
 	weightUnit: 'lbs',
 	defaultRestSeconds: 60,
 	restTimerSound: true,
@@ -122,6 +129,8 @@ interface CompletedStepEntry {
 }
 
 interface ActiveWorkoutState {
+	setStarted: boolean;
+	setDrafts: Record<string, { reps: number; weight: number }>;
 	workout: Workout;
 	startTime: number;
 	steps: WorkoutStep[];
@@ -157,6 +166,11 @@ function formatTime(totalSeconds: number): string {
 	const s = Math.floor(abs % 60);
 	const sign = totalSeconds < 0 ? '-' : '';
 	return `${sign}${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function workoutElapsedSeconds(state: ActiveWorkoutState, now = Date.now()): number {
+	const end = state.isPaused ? state.pauseStartTime : now;
+	return Math.max(0, Math.floor((end - state.startTime - state.totalPausedMs) / 1000));
 }
 
 function formatDurationShort(totalSeconds: number): string {
@@ -419,6 +433,9 @@ class UpdateWorkoutModal extends Modal {
 export default class WorkoutTrackerPlugin extends Plugin {
 	data: PluginData = DEFAULT_DATA;
 	activeState: ActiveWorkoutState | null = null;
+	private dailySync: Promise<void> = Promise.resolve();
+	private pendingDailyNotes = new Set<string>();
+	private dailySyncWarning = false;
 
 	async onload(): Promise<void> {
 		await this.loadPluginData();
@@ -429,8 +446,12 @@ export default class WorkoutTrackerPlugin extends Plugin {
 
 		this.addCommand({ id: 'open-workout-ledger', name: 'Open Workout Ledger', callback: () => this.activateView() });
 		this.addCommand({ id: 'start-last-workout', name: 'Start Last Workout', callback: () => this.startLastWorkout() });
+		this.addCommand({ id: 'sync-daily-notes', name: 'Sync workout summaries to daily notes', callback: () => this.syncDailyNotes(false) });
 
-		this.app.workspace.onLayoutReady(() => {});
+		this.app.workspace.onLayoutReady(() => { void this.syncDailyNotes(); });
+		this.registerInterval(window.setInterval(() => {
+			if (this.pendingDailyNotes.size) void this.syncDailyNotes(true, true);
+		}, 60000));
 	}
 
 	onunload(): void {
@@ -446,6 +467,32 @@ export default class WorkoutTrackerPlugin extends Plugin {
 	}
 
 	async savePluginData(): Promise<void> { await this.saveData(this.data); }
+
+	async onExternalSettingsChange(): Promise<void> {
+		await this.loadPluginData();
+		await this.syncDailyNotes();
+	}
+
+	async syncDailyNotes(quiet = true, retryOnly = false): Promise<void> {
+		const run = async () => {
+			let changed = 0, failures = 0;
+			for (const workout of this.data.history) {
+				if (retryOnly && !this.pendingDailyNotes.has(workout.id)) continue;
+				try {
+					if (await writeWorkoutDailyNote(this.app, workout, this.data.settings.dailyNoteFolder, this.data.settings.dailyNoteTemplate)) changed++;
+					this.pendingDailyNotes.delete(workout.id);
+				} catch {
+					this.pendingDailyNotes.add(workout.id);
+					failures++;
+				}
+			}
+			if (failures && (!quiet || !this.dailySyncWarning)) new Notice('Workout history is saved, but daily-note sync failed; retrying automatically. Check the daily-note paths in Workout Ledger settings.');
+			else if (!quiet && !failures) new Notice(`Workout summaries synced: ${changed} updated.`);
+			this.dailySyncWarning = failures > 0;
+		};
+		this.dailySync = this.dailySync.then(run, run);
+		await this.dailySync;
+	}
 
 	async activateView(): Promise<void> {
 		const { workspace } = this.app;
@@ -477,7 +524,7 @@ export default class WorkoutTrackerPlugin extends Plugin {
 		const last = this.data.lastUsed[key];
 		this.activeState = {
 			workout: JSON.parse(JSON.stringify(workout)),
-			startTime: Date.now(), steps, currentStepIndex: 0,
+			startTime: Date.now(), steps, currentStepIndex: 0, setStarted: false, setDrafts: {},
 			isResting: false, restRemaining: 0, setElapsed: 0,
 			completedExercises: [], currentSetStartTime: Date.now(), restStartTime: 0,
 			currentReps: last?.reps ?? firstSet?.reps ?? 0,
@@ -539,6 +586,7 @@ export default class WorkoutTrackerPlugin extends Plugin {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 class WorkoutTrackerView extends ItemView {
+	private finishingWorkout = false;
 	plugin: WorkoutTrackerPlugin;
 	private screen: Screen = 'home';
 	private editWorkoutIndex: number = 0;
@@ -1025,6 +1073,7 @@ class WorkoutTrackerView extends ItemView {
 
 		const header = container.createDiv({ cls: 'wt-active-header' });
 		header.createEl('span', { text: workout.name, cls: 'wt-active-title' });
+		header.createEl('span', { text: `Time spent: ${formatTime(workoutElapsedSeconds(state))}`, cls: 'wt-total-time' });
 		const endBtn = header.createEl('button', { text: 'End', cls: 'wt-btn wt-btn-danger wt-btn-sm' });
 		endBtn.addEventListener('click', () => { new ConfirmModal(this.app, 'End this workout early?', () => this.finishWorkout()).open(); });
 
@@ -1088,8 +1137,8 @@ class WorkoutTrackerView extends ItemView {
 			const setElapsedValue = setElapsedEl.createEl('span', { cls: 'wt-timer-value', text: formatTime(state.setElapsed) });
 			setElapsedValue.dataset.role = 'setElapsed';
 
-			const completeBtn = panel.createEl('button', { text: '✓ Complete Set', cls: 'wt-btn wt-btn-complete' });
-			completeBtn.addEventListener('click', () => this.completeCurrentSet());
+			const completeBtn = panel.createEl('button', { text: state.setStarted ? '✓ Complete Set' : 'Start Set', cls: 'wt-btn wt-btn-complete' });
+			completeBtn.addEventListener('click', () => state.setStarted ? this.completeCurrentSet() : this.startCurrentSet());
 
 			// Controls row: Skip, Pause, Back
 			const controls = panel.createDiv({ cls: 'wt-controls-row' });
@@ -1118,7 +1167,15 @@ class WorkoutTrackerView extends ItemView {
 		const remainingSteps = state.steps.slice(state.currentStepIndex + 1);
 		if (remainingSteps.length > 0) {
 			const upcomingSection = container.createEl('details', { cls: 'wt-upcoming-section' });
+			upcomingSection.open = true;
 			upcomingSection.createEl('summary', { text: `Upcoming (${remainingSteps.length} set${remainingSteps.length !== 1 ? 's' : ''} remaining)` });
+			upcomingSection.createEl('p', { text: state.setStarted && !state.isResting ? 'Finish or skip the current set to choose another exercise.' : 'Choose an available exercise. Other unfinished sets stay in the queue.', cls: 'wt-muted' });
+			const navigation = upcomingSection.createDiv({ cls: 'wt-exercise-navigation' });
+			for (const exerciseIndex of [...new Set(remainingSteps.map(s => s.exerciseIndex))]) {
+				const choose = navigation.createEl('button', { text: `${state.isResting ? 'Do next' : 'Choose'}: ${workout.exercises[exerciseIndex].name}`, cls: 'wt-btn wt-btn-sm' });
+				choose.disabled = state.isPaused || (state.setStarted && !state.isResting);
+				this.registerDomEvent(choose, 'click', () => this.chooseExercise(exerciseIndex));
+			}
 			let lastExName = '';
 			for (const rs of remainingSteps) {
 				const ex = workout.exercises[rs.exerciseIndex];
@@ -1171,6 +1228,7 @@ class WorkoutTrackerView extends ItemView {
 	private tickActiveTimer(): void {
 		const state = this.plugin.activeState;
 		if (!state || state.isPaused) return;
+		this.contentEl.querySelector('.wt-total-time')?.setText(`Time spent: ${formatTime(workoutElapsedSeconds(state))}`);
 		if (state.isResting) {
 			const restElapsed = Math.floor((Date.now() - state.restStartTime) / 1000);
 			const step = state.steps[state.currentStepIndex];
@@ -1189,7 +1247,7 @@ class WorkoutTrackerView extends ItemView {
 					this.contentEl.querySelector('.wt-current-panel')?.addClass('wt-rest-overtime');
 				}
 			}
-		} else {
+		} else if (state.setStarted) {
 			state.setElapsed = Math.floor((Date.now() - state.currentSetStartTime) / 1000);
 			const el = this.contentEl.querySelector('[data-role="setElapsed"]');
 			if (el) el.setText(formatTime(state.setElapsed));
@@ -1198,7 +1256,9 @@ class WorkoutTrackerView extends ItemView {
 
 	private async completeCurrentSet(): Promise<void> {
 		const state = this.plugin.activeState;
-		if (!state) return;
+		if (!state || !state.setStarted || state.isResting || state.isPaused) return;
+		state.setStarted = false;
+		state.setElapsed = Math.floor((Date.now() - state.currentSetStartTime) / 1000);
 		const step = state.steps[state.currentStepIndex];
 		const currentEx = state.workout.exercises[step.exerciseIndex];
 		const cs: CompletedSet = { reps: state.currentReps, weight: state.currentWeight, setSeconds: state.setElapsed, actualRestSeconds: 0 };
@@ -1218,10 +1278,12 @@ class WorkoutTrackerView extends ItemView {
 	private advanceFromRest(): void {
 		const state = this.plugin.activeState;
 		if (!state) return;
-		const lastCex = state.completedExercises[state.completedExercises.length - 1];
+		const lastEntry = state.stepHistory[state.stepHistory.length - 1];
+		const lastCex = state.completedExercises.find(e => e.name === lastEntry?.exerciseName);
 		if (lastCex && lastCex.sets.length > 0) lastCex.sets[lastCex.sets.length - 1].actualRestSeconds = Math.floor((Date.now() - state.restStartTime) / 1000);
 		state.isResting = false;
 		this.advanceToNextStep();
+		this.startCurrentSet();
 	}
 
 	private advanceToNextStep(): void {
@@ -1229,15 +1291,44 @@ class WorkoutTrackerView extends ItemView {
 		if (!state) return;
 		state.currentStepIndex++;
 		if (state.currentStepIndex >= state.steps.length) return;
-		const nextStep = state.steps[state.currentStepIndex];
-		const nextEx = state.workout.exercises[nextStep.exerciseIndex];
-		const nextSet = nextEx.sets[nextStep.setIndex];
-		const key = lastUsedKey(state.workout.name, nextEx.name, nextStep.setIndex);
-		const last = this.plugin.data.lastUsed[key];
-		state.currentReps = last?.reps ?? nextSet?.reps ?? 0;
-		state.currentWeight = last?.weight ?? nextSet?.weight ?? 0;
-		state.setElapsed = 0; state.currentSetStartTime = Date.now(); this.restAlertFired = false;
+		this.prepareCurrentSet();
+	}
+
+	private prepareCurrentSet(): void {
+		const state = this.plugin.activeState;
+		if (!state) return;
+		const step = state.steps[state.currentStepIndex];
+		if (!step) return;
+		const ex = state.workout.exercises[step.exerciseIndex];
+		const set = ex.sets[step.setIndex];
+		const previous = state.setDrafts[`${step.exerciseIndex}:${step.setIndex}`] ?? this.plugin.data.lastUsed[lastUsedKey(state.workout.name, ex.name, step.setIndex)];
+		state.currentReps = previous?.reps ?? set?.reps ?? 0;
+		state.currentWeight = previous?.weight ?? set?.weight ?? 0;
+		state.setStarted = false; state.setElapsed = 0; state.currentSetStartTime = 0;
+		this.restAlertFired = false; this.render();
+	}
+
+	private startCurrentSet(): void {
+		const state = this.plugin.activeState;
+		if (!state || state.setStarted || state.isPaused || state.isResting) return;
+		state.setStarted = true; state.setElapsed = 0; state.currentSetStartTime = Date.now();
 		this.render();
+	}
+
+	private chooseExercise(exerciseIndex: number): void {
+		const state = this.plugin.activeState;
+		if (!state || state.isPaused || (state.setStarted && !state.isResting)) return;
+		const start = state.currentStepIndex + (state.isResting ? 1 : 0);
+		const pending = state.steps.slice(start);
+		const chosen = pending.filter(s => s.exerciseIndex === exerciseIndex);
+		if (!chosen.length) return;
+		if (!state.isResting) {
+			const step = state.steps[state.currentStepIndex];
+			state.setDrafts[`${step.exerciseIndex}:${step.setIndex}`] = { reps: state.currentReps, weight: state.currentWeight };
+		}
+		// Only reorder pending steps. Completed step/history indices remain stable.
+		state.steps.splice(start, pending.length, ...chosen, ...pending.filter(s => s.exerciseIndex !== exerciseIndex));
+		if (state.isResting) this.render(); else this.prepareCurrentSet();
 	}
 
 	private skipCurrentSet(): void {
@@ -1289,48 +1380,63 @@ class WorkoutTrackerView extends ItemView {
 		state.currentReps = lastEntry.completedSet.reps;
 		state.currentWeight = lastEntry.completedSet.weight;
 		state.setElapsed = 0;
-		state.currentSetStartTime = Date.now();
+		state.currentSetStartTime = 0;
+		state.setStarted = false;
 		this.restAlertFired = false;
 		this.render();
 	}
 
 	private async finishWorkout(): Promise<void> {
 		const state = this.plugin.activeState;
-		if (!state) return;
-		this.clearTimers();
-		const totalDuration = Math.floor((Date.now() - state.startTime - state.totalPausedMs) / 1000);
-		const completed: CompletedWorkout = {
-			id: generateId(), workoutName: state.workout.name, date: new Date().toISOString(),
-			totalDurationSeconds: totalDuration, exercises: state.completedExercises,
-		};
-		const prDescriptions = this.plugin.checkAndUpdatePRs(completed);
-		if (prDescriptions.length > 0) completed.prs = prDescriptions;
-		this.plugin.data.history.push(completed);
-		await this.plugin.savePluginData();
-		const template = this.plugin.data.workouts.find((w) => w.name === completed.workoutName);
-		this.plugin.activeState = null;
-		this.completedWorkout = completed;
-		this.completedPRs = prDescriptions;
+		if (!state || this.finishingWorkout) return;
+		this.finishingWorkout = true;
+		try {
+			this.clearTimers();
+			const finishedAt = new Date();
+			const totalDuration = workoutElapsedSeconds(state, finishedAt.getTime());
+			const completed: CompletedWorkout = {
+				id: generateId(), workoutName: state.workout.name, date: finishedAt.toISOString(),
+				dailyNoteDate: `${finishedAt.getFullYear()}-${String(finishedAt.getMonth() + 1).padStart(2, '0')}-${String(finishedAt.getDate()).padStart(2, '0')}`,
+				dailyNoteTime: `${String(finishedAt.getHours()).padStart(2, '0')}:${String(finishedAt.getMinutes()).padStart(2, '0')}`,
+				totalDurationSeconds: totalDuration, exercises: state.completedExercises,
+			};
+			const prDescriptions = this.plugin.checkAndUpdatePRs(completed);
+			if (prDescriptions.length > 0) completed.prs = prDescriptions;
+			this.plugin.data.history.push(completed);
+			try { await this.plugin.savePluginData(); }
+			catch {
+				this.plugin.data.history = this.plugin.data.history.filter(entry => entry.id !== completed.id);
+				this.plugin.rebuildAllPRs();
+				new Notice('Could not save this workout. Your active session is still open; try End again.');
+				this.render();
+				return;
+			}
+			const template = this.plugin.data.workouts.find((w) => w.name === completed.workoutName);
+			this.plugin.activeState = null;
+			this.completedWorkout = completed;
+			this.completedPRs = prDescriptions;
 
-		if (template) {
-			new UpdateWorkoutModal(this.app, completed.workoutName,
-				async () => {
-					for (const cex of completed.exercises) {
-						const tmplEx = template.exercises.find((e) => e.name === cex.name);
-						if (!tmplEx) continue;
-						cex.sets.forEach((cs, si) => { if (si < tmplEx.sets.length) { tmplEx.sets[si].reps = cs.reps; tmplEx.sets[si].weight = cs.weight; } });
-					}
-					template.lastUpdatedDurationSeconds = totalDuration;
-					await this.plugin.savePluginData();
-					new Notice('Workout template updated!');
-					this.navigateTo('completion');
-				},
-				() => { this.navigateTo('completion'); }
-			).open();
-		} else {
-			this.navigateTo('completion');
-		}
-		new Notice(`Workout "${completed.workoutName}" completed!`);
+			if (template) {
+				new UpdateWorkoutModal(this.app, completed.workoutName,
+					async () => {
+						for (const cex of completed.exercises) {
+							const tmplEx = template.exercises.find((e) => e.name === cex.name);
+							if (!tmplEx) continue;
+							cex.sets.forEach((cs, si) => { if (si < tmplEx.sets.length) { tmplEx.sets[si].reps = cs.reps; tmplEx.sets[si].weight = cs.weight; } });
+						}
+						template.lastUpdatedDurationSeconds = totalDuration;
+						await this.plugin.savePluginData();
+						new Notice('Workout template updated!');
+						this.navigateTo('completion');
+					},
+					() => { this.navigateTo('completion'); }
+				).open();
+			} else {
+				this.navigateTo('completion');
+			}
+			new Notice(`Workout "${completed.workoutName}" completed!`);
+			await this.plugin.syncDailyNotes();
+		} finally { this.finishingWorkout = false; }
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════════
@@ -1747,6 +1853,19 @@ class WorkoutSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this; containerEl.empty();
 		containerEl.createEl('h2', { text: 'Workout Ledger Settings' });
+		new Setting(containerEl).setName('Daily-note folder').setDesc('Completed workouts automatically add a one-sentence rundown and time spent to Log. Pauses are excluded.').addText(text =>
+			text.setValue(this.plugin.data.settings.dailyNoteFolder).onChange(async value => {
+				this.plugin.data.settings.dailyNoteFolder = value.trim(); await this.plugin.savePluginData();
+			})
+		);
+		new Setting(containerEl).setName('Daily-note template').setDesc('Vault-relative template path, used only when the daily note does not exist.').addText(text =>
+			text.setValue(this.plugin.data.settings.dailyNoteTemplate).onChange(async value => {
+				this.plugin.data.settings.dailyNoteTemplate = value.trim(); await this.plugin.savePluginData();
+			})
+		);
+		new Setting(containerEl).setName('Sync workout summaries').setDesc('Repair or backfill daily Log entries from saved history without duplicating workouts.').addButton(button =>
+			button.setButtonText('Sync now').onClick(() => { void this.plugin.syncDailyNotes(false); })
+		);
 
 		new Setting(containerEl).setName('Weight unit').setDesc('Cosmetic label shown next to weight fields.').addDropdown((dd) =>
 			dd.addOption('lbs', 'lbs').addOption('kg', 'kg').setValue(this.plugin.data.settings.weightUnit)
@@ -1931,6 +2050,7 @@ class ImportDataModal extends Modal {
 			? `Replaced with ${imported.workouts.length} workouts and ${imported.history.length} history entries.`
 			: `Merged data. Check your workouts and history.`;
 		new Notice(`Import complete! ${count}`);
+		await this.plugin.syncDailyNotes();
 		this.close();
 	}
 
