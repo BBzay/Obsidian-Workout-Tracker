@@ -1,6 +1,7 @@
 import {
 	App,
 	ItemView,
+	Menu,
 	Modal,
 	Notice,
 	Plugin,
@@ -11,6 +12,18 @@ import {
 	setIcon,
 } from 'obsidian';
 import { writeWorkoutDailyNote } from './daily-note';
+import {
+	Plan,
+	WEEKDAY_LONG,
+	WEEKDAY_SHORT,
+	WEEK_ORDER,
+	formatDays,
+	nextScheduled,
+	normalizePlanData,
+	planWorkoutIndices,
+	weekRank,
+	workoutsOnDay,
+} from './plans';
 
 // ─── View Type Constants ─────────────────────────────────────────────────────
 
@@ -41,6 +54,10 @@ interface Workout {
 	exercises: Exercise[];
 	supersets: Superset[];
 	lastUpdatedDurationSeconds?: number;
+	/** Plan this workout belongs to (at most one). */
+	planId?: string;
+	/** Weekdays (Date.getDay(), 0 = Sunday) this workout is scheduled in its plan. */
+	days?: number[];
 }
 
 interface CompletedSet {
@@ -93,6 +110,10 @@ interface PluginData {
 	history: CompletedWorkout[];
 	settings: PluginSettings;
 	personalRecords: Record<string, PRRecord>;
+	plans: Plan[];
+	/** Only this plan's weekdays count for "today". */
+	currentPlanId?: string;
+	noPlanCollapsed?: boolean;
 }
 
 const DEFAULT_SETTINGS: PluginSettings = {
@@ -110,6 +131,7 @@ const DEFAULT_DATA: PluginData = {
 	history: [],
 	settings: DEFAULT_SETTINGS,
 	personalRecords: {},
+	plans: [],
 };
 
 // ─── Workout Step — flat sequence for active mode ────────────────────────────
@@ -357,21 +379,66 @@ class ConfirmModal extends Modal {
 class RenameModal extends Modal {
 	private currentName: string;
 	private onSubmit: (newName: string) => void;
-	constructor(app: App, currentName: string, onSubmit: (newName: string) => void) {
-		super(app); this.currentName = currentName; this.onSubmit = onSubmit;
+	private title: string;
+	private buttonText: string;
+	constructor(app: App, currentName: string, onSubmit: (newName: string) => void, title = 'Rename Workout', buttonText = 'Rename') {
+		super(app); this.currentName = currentName; this.onSubmit = onSubmit; this.title = title; this.buttonText = buttonText;
 	}
 	onOpen() {
 		const { contentEl } = this;
-		contentEl.createEl('h3', { text: 'Rename Workout' });
+		contentEl.createEl('h3', { text: this.title });
 		let newName = this.currentName;
-		new Setting(contentEl).setName('New name').addText((text) =>
-			text.setValue(this.currentName).onChange((v) => { newName = v; })
-		);
-		new Setting(contentEl).addButton((btn) =>
-			btn.setButtonText('Rename').setCta().onClick(() => {
-				if (newName.trim()) { this.onSubmit(newName.trim()); this.close(); }
-			})
-		);
+		const submit = () => { if (newName.trim()) { this.onSubmit(newName.trim()); this.close(); } };
+		new Setting(contentEl).setName('Name').addText((text) => {
+			text.setValue(this.currentName).onChange((v) => { newName = v; });
+			text.inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+			window.setTimeout(() => { text.inputEl.focus(); text.inputEl.select(); }, 0);
+		});
+		new Setting(contentEl).addButton((btn) => btn.setButtonText(this.buttonText).setCta().onClick(submit));
+	}
+	onClose() { this.contentEl.empty(); }
+}
+
+/** Checklist of workouts not yet in `plan`; checked ones move into it. */
+class PlanWorkoutsModal extends Modal {
+	private plan: Plan;
+	private plugin: WorkoutTrackerPlugin;
+	private onDone: () => void;
+	constructor(app: App, plugin: WorkoutTrackerPlugin, plan: Plan, onDone: () => void) {
+		super(app); this.plugin = plugin; this.plan = plan; this.onDone = onDone;
+	}
+	onOpen() {
+		const { contentEl } = this;
+		const { workouts, plans } = this.plugin.data;
+		contentEl.createEl('h3', { text: `Add workouts to ${this.plan.name}` });
+		const candidates = workouts.map((w, i) => ({ w, i })).filter(({ w }) => w.planId !== this.plan.id);
+		if (candidates.length === 0) {
+			contentEl.createEl('p', { text: 'Every workout is already in this plan.', cls: 'wt-muted' });
+			return;
+		}
+		contentEl.createEl('p', { text: 'Workouts in another plan will move here. Their days are kept.', cls: 'wt-muted' });
+		const selected = new Set<number>();
+		const list = contentEl.createDiv({ cls: 'wt-plan-pick-list' });
+		for (const { w, i } of candidates) {
+			const row = list.createDiv({ cls: 'wt-ss-check-row' });
+			const cb = row.createEl('input', { type: 'checkbox' });
+			cb.id = `wt-plan-pick-${i}`;
+			const label = row.createEl('label', { text: w.name });
+			label.setAttribute('for', cb.id);
+			const other = plans.find((p) => p.id === w.planId);
+			if (other) label.createSpan({ text: `  (${other.name})`, cls: 'wt-muted' });
+			cb.addEventListener('change', () => { if (cb.checked) selected.add(i); else selected.delete(i); });
+		}
+		const btnRow = contentEl.createDiv({ cls: 'wt-modal-buttons' });
+		btnRow.createEl('button', { text: 'Cancel' }).addEventListener('click', () => this.close());
+		btnRow.createEl('button', { text: 'Add to plan', cls: 'mod-cta' }).addEventListener('click', async () => {
+			if (selected.size === 0) { new Notice('Select at least one workout.'); return; }
+			for (const i of selected) workouts[i].planId = this.plan.id;
+			this.plan.collapsed = false;
+			await this.plugin.savePluginData();
+			this.onDone();
+			this.close();
+		});
 	}
 	onClose() { this.contentEl.empty(); }
 }
@@ -446,6 +513,7 @@ export default class WorkoutTrackerPlugin extends Plugin {
 
 		this.addCommand({ id: 'open-workout-ledger', name: 'Open Workout Ledger', callback: () => this.activateView() });
 		this.addCommand({ id: 'start-last-workout', name: 'Start Last Workout', callback: () => this.startLastWorkout() });
+		this.addCommand({ id: 'start-todays-workout', name: "Start today's workout", callback: () => this.startTodaysWorkout() });
 		this.addCommand({ id: 'sync-daily-notes', name: 'Sync workout summaries to daily notes', callback: () => this.syncDailyNotes(false) });
 
 		this.app.workspace.onLayoutReady(() => { void this.syncDailyNotes(); });
@@ -460,10 +528,21 @@ export default class WorkoutTrackerPlugin extends Plugin {
 
 	async loadPluginData(): Promise<void> {
 		const saved = await this.loadData();
-		this.data = Object.assign({}, DEFAULT_DATA, saved);
+		// Fresh containers so defaults are never shared between loads
+		this.data = Object.assign({}, DEFAULT_DATA, { workouts: [], history: [], lastUsed: {}, personalRecords: {}, plans: [] }, saved);
 		this.data.settings = Object.assign({}, DEFAULT_SETTINGS, this.data.settings);
-		if (!this.data.personalRecords) this.data.personalRecords = {};
-		for (const w of this.data.workouts) { if (!w.supersets) w.supersets = []; }
+		this.normalizeData();
+	}
+
+	/** Repair shapes from older versions or imports. Safe to call repeatedly. */
+	normalizeData(): void {
+		const d = this.data;
+		if (!Array.isArray(d.workouts)) d.workouts = [];
+		if (!Array.isArray(d.history)) d.history = [];
+		if (!d.lastUsed) d.lastUsed = {};
+		if (!d.personalRecords) d.personalRecords = {};
+		for (const w of d.workouts) { if (!w.supersets) w.supersets = []; }
+		normalizePlanData(d);
 	}
 
 	async savePluginData(): Promise<void> { await this.saveData(this.data); }
@@ -502,8 +581,46 @@ export default class WorkoutTrackerPlugin extends Plugin {
 			if (!newLeaf) return;
 			leaf = newLeaf;
 			await leaf.setViewState({ type: VIEW_TYPE_TRACKER, active: true });
+		} else if (leaf.view instanceof WorkoutTrackerView) {
+			leaf.view.showActiveIfRunning();
 		}
 		workspace.revealLeaf(leaf);
+	}
+
+	getCurrentPlan(): Plan | undefined {
+		return this.data.plans.find((p) => p.id === this.data.currentPlanId);
+	}
+
+	getTodayWorkouts(date = new Date()): Workout[] {
+		return workoutsOnDay(this.data.workouts, this.getCurrentPlan()?.id, date.getDay()).map((i) => this.data.workouts[i]);
+	}
+
+	/** e.g. "Pull Day tomorrow" / "Pull Day on Wednesday"; null when the plan has no days set. */
+	describeNextWorkout(date = new Date()): string | null {
+		const today = date.getDay();
+		const next = nextScheduled(this.data.workouts, this.getCurrentPlan()?.id, today);
+		if (!next) return null;
+		const names = next.indices.map((i) => this.data.workouts[i].name).join(' + ');
+		return next.offset === 1 ? `${names} tomorrow` : `${names} on ${WEEKDAY_LONG[(today + next.offset) % 7]}`;
+	}
+
+	async startTodaysWorkout(): Promise<void> {
+		if (this.activeState) { new Notice('A workout is already in progress.'); await this.activateView(); return; }
+		const plan = this.getCurrentPlan();
+		if (!plan) { new Notice('No current plan. Open a plan\'s menu on the Workout Ledger home screen and choose "Set as current plan".'); return; }
+		const today = this.getTodayWorkouts();
+		if (today.length === 1) {
+			this.beginWorkout(today[0]);
+			await this.activateView();
+			return;
+		}
+		if (today.length > 1) {
+			new Notice(`${today.length} workouts are scheduled today. Pick one on the home screen.`);
+			await this.activateView();
+			return;
+		}
+		const next = this.describeNextWorkout();
+		new Notice(next ? `Rest day. Next up: ${next}.` : `Rest day. No days are set in "${plan.name}" yet.`);
 	}
 
 	async startLastWorkout(): Promise<void> {
@@ -599,6 +716,8 @@ class WorkoutTrackerView extends ItemView {
 
 	// Home screen state
 	private expandedWorkoutIndex: number = -1;
+	/** Date the home screen was last drawn for, so "today" refreshes at midnight. */
+	private renderedDay = '';
 
 	// History/stats state
 	private historyTab: 'history' | 'stats' = 'history';
@@ -617,6 +736,14 @@ class WorkoutTrackerView extends ItemView {
 	async onOpen(): Promise<void> {
 		if (this.plugin.activeState) this.screen = 'active';
 		this.render();
+		this.registerInterval(window.setInterval(() => {
+			if (this.screen === 'home' && this.renderedDay !== new Date().toDateString()) this.render();
+		}, 60000));
+	}
+
+	/** Jump to the running workout (used when a command starts one while the view is already open). */
+	showActiveIfRunning(): void {
+		if (this.plugin.activeState && this.screen !== 'active') { this.screen = 'active'; this.render(); }
 	}
 	async onClose(): Promise<void> { this.clearTimers(); this.contentEl.empty(); }
 
@@ -666,104 +793,266 @@ class WorkoutTrackerView extends ItemView {
 		editBtn.setAttribute('title', 'Edit Workouts');
 		editBtn.addEventListener('click', () => this.navigateTo('edit'));
 
-		// ── Workout cards ────────────────────────────────────────────────────
-		const workouts = this.plugin.data.workouts;
-		if (workouts.length === 0) {
+		this.renderedDay = new Date().toDateString();
+		const { workouts, plans } = this.plugin.data;
+
+		if (workouts.length === 0 && plans.length === 0) {
 			const emptyState = container.createDiv({ cls: 'wt-empty-state' });
 			emptyState.createEl('div', { text: 'No workouts yet', cls: 'wt-empty-state-title' });
 			emptyState.createEl('p', { text: 'Create your first workout template to get started.', cls: 'wt-empty-msg' });
 			const createBtn = emptyState.createEl('button', { text: '+ Create Workout', cls: 'wt-btn wt-btn-primary' });
-			createBtn.addEventListener('click', async () => {
-				workouts.push({ name: 'Workout 1', exercises: [], supersets: [] });
-				this.editWorkoutIndex = 0;
-				await this.plugin.savePluginData();
-				this.navigateTo('edit');
-			});
+			createBtn.addEventListener('click', () => { void this.createWorkout(); });
 			return;
 		}
 
-		const cardList = container.createDiv({ cls: 'wt-workout-cards' });
+		this.renderToday(container);
 
-		workouts.forEach((workout, idx) => {
-			const isExpanded = this.expandedWorkoutIndex === idx;
-			const card = cardList.createDiv({ cls: `wt-workout-card ${isExpanded ? 'wt-workout-card-expanded' : ''}` });
+		if (plans.length === 0) {
+			// No plans: the original flat list
+			const cardList = container.createDiv({ cls: 'wt-workout-cards' });
+			workouts.forEach((workout, idx) => this.renderWorkoutCard(cardList, workout, idx));
+		} else {
+			const groups = container.createDiv({ cls: 'wt-plan-groups' });
+			plans.forEach((plan) => this.renderPlanGroup(groups, plan));
+			if (planWorkoutIndices(workouts, undefined).length > 0) this.renderPlanGroup(groups, null);
+		}
 
-			const cardBody = card.createDiv({ cls: 'wt-workout-card-body' });
+		// ── New workout / plan buttons at bottom ─────────────────────────────
+		const bottom = container.createDiv({ cls: 'wt-home-bottom-row' });
+		bottom.createEl('button', { text: '+ New Workout', cls: 'wt-btn wt-home-add-btn' })
+			.addEventListener('click', () => { void this.createWorkout(); });
+		bottom.createEl('button', { text: '+ New Plan', cls: 'wt-btn wt-home-add-btn' })
+			.addEventListener('click', () => this.promptNewPlan());
+	}
+
+	/** Add a blank workout (optionally inside a plan) and open it in the editor. */
+	private async createWorkout(planId?: string): Promise<void> {
+		const workouts = this.plugin.data.workouts;
+		const workout: Workout = { name: `Workout ${workouts.length + 1}`, exercises: [], supersets: [] };
+		if (planId) workout.planId = planId;
+		workouts.push(workout);
+		this.editWorkoutIndex = workouts.length - 1;
+		await this.plugin.savePluginData();
+		this.navigateTo('edit');
+	}
+
+	/** Ask for a name, create the plan (first plan becomes current), then call onCreated. */
+	private promptNewPlan(onCreated?: (plan: Plan) => void | Promise<void>): void {
+		const data = this.plugin.data;
+		new RenameModal(this.app, `Plan ${data.plans.length + 1}`, async (name) => {
+			const plan: Plan = { id: generateId(), name };
+			data.plans.push(plan);
+			if (!data.currentPlanId) data.currentPlanId = plan.id;
+			if (onCreated) await onCreated(plan);
+			await this.plugin.savePluginData();
+			this.render();
+		}, 'New Plan', 'Create').open();
+	}
+
+	// ── Today ────────────────────────────────────────────────────────────────
+
+	private renderToday(container: HTMLElement): void {
+		const { plans, workouts } = this.plugin.data;
+		if (plans.length === 0) return;
+		const now = new Date();
+		const plan = this.plugin.getCurrentPlan();
+
+		const section = container.createDiv({ cls: 'wt-today' });
+		const header = section.createDiv({ cls: 'wt-today-header' });
+		header.createSpan({ text: `Today · ${WEEKDAY_LONG[now.getDay()]}`, cls: 'wt-today-label' });
+		if (plan) header.createSpan({ text: plan.name, cls: 'wt-today-plan' });
+
+		if (!plan) {
+			section.createDiv({ cls: 'wt-today-hint', text: 'Choose a current plan (⋯ on a plan below) to have today\'s workout ready here.' });
+			return;
+		}
+
+		const todayIdx = workoutsOnDay(workouts, plan.id, now.getDay());
+		if (todayIdx.length > 0) {
+			const list = section.createDiv({ cls: 'wt-workout-cards wt-today-cards' });
+			todayIdx.forEach((i) => this.renderWorkoutCard(list, workouts[i], i, true));
+			return;
+		}
+
+		const rest = section.createDiv({ cls: 'wt-rest-card' });
+		const next = this.plugin.describeNextWorkout(now);
+		if (next) {
+			rest.createDiv({ text: 'Rest day', cls: 'wt-rest-title' });
+			rest.createDiv({ text: `Next up: ${next}`, cls: 'wt-rest-next' });
+		} else {
+			rest.createDiv({ text: 'No days scheduled yet', cls: 'wt-rest-title' });
+			rest.createDiv({ text: `Edit a workout in ${plan.name} and pick its days.`, cls: 'wt-rest-next' });
+		}
+	}
+
+	// ── Plan groups ──────────────────────────────────────────────────────────
+
+	/** A foldable group of workouts. `plan === null` is the "No plan" group. */
+	private renderPlanGroup(parent: HTMLElement, plan: Plan | null): void {
+		const data = this.plugin.data;
+		const indices = planWorkoutIndices(data.workouts, plan?.id);
+		const collapsed = plan ? !!plan.collapsed : !!data.noPlanCollapsed;
+		const isCurrent = !!plan && plan.id === data.currentPlanId;
+
+		const group = parent.createDiv({ cls: 'wt-plan-group' });
+		if (isCurrent) group.addClass('wt-plan-current');
+		if (!plan) group.addClass('wt-plan-none');
+
+		const header = group.createDiv({ cls: 'wt-plan-header' });
+		header.setAttribute('role', 'button');
+		header.setAttribute('tabindex', '0');
+		header.setAttribute('aria-expanded', String(!collapsed));
+		const toggle = async () => {
+			if (plan) plan.collapsed = !collapsed; else data.noPlanCollapsed = !collapsed;
+			await this.plugin.savePluginData();
+			this.render();
+		};
+		header.addEventListener('click', () => { void toggle(); });
+		header.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void toggle(); } });
+
+		setIcon(header.createSpan({ cls: 'wt-plan-chevron' }), collapsed ? 'chevron-right' : 'chevron-down');
+		const titleWrap = header.createDiv({ cls: 'wt-plan-title-wrap' });
+		const titleLine = titleWrap.createDiv({ cls: 'wt-plan-title-line' });
+		titleLine.createSpan({ text: plan ? plan.name : 'No plan', cls: 'wt-plan-name' });
+		if (isCurrent) titleLine.createSpan({ text: 'Current', cls: 'wt-plan-badge' });
+
+		const allDays = new Set<number>();
+		for (const i of indices) for (const d of data.workouts[i].days ?? []) allDays.add(d);
+		let sub = `${indices.length} workout${indices.length !== 1 ? 's' : ''}`;
+		if (plan && allDays.size > 0) sub += ` · ${formatDays([...allDays])}`;
+		titleWrap.createDiv({ text: sub, cls: 'wt-plan-sub' });
+
+		if (plan) {
+			const menuBtn = header.createEl('button', { cls: 'wt-btn-icon wt-plan-menu-btn' });
+			menuBtn.setAttribute('aria-label', `${plan.name} options`);
+			setIcon(menuBtn, 'more-horizontal');
+			menuBtn.addEventListener('click', (e) => { e.stopPropagation(); this.openPlanMenu(plan, e); });
+			menuBtn.addEventListener('keydown', (e) => e.stopPropagation());
+		}
+
+		if (collapsed) return;
+		const list = group.createDiv({ cls: 'wt-workout-cards wt-plan-workouts' });
+		if (indices.length === 0) {
+			list.createDiv({ text: 'No workouts in this plan yet. Use ⋯ to add some.', cls: 'wt-plan-empty' });
+			return;
+		}
+		indices.forEach((i) => this.renderWorkoutCard(list, data.workouts[i], i));
+	}
+
+	private openPlanMenu(plan: Plan, evt: MouseEvent): void {
+		const data = this.plugin.data;
+		const save = async () => { await this.plugin.savePluginData(); this.render(); };
+		const planIdx = data.plans.indexOf(plan);
+		const count = data.workouts.filter((w) => w.planId === plan.id).length;
+		const menu = new Menu();
+
+		if (plan.id === data.currentPlanId) {
+			menu.addItem((item) => item.setTitle('Stop using as current plan').setIcon('star-off')
+				.onClick(() => { delete data.currentPlanId; void save(); }));
+		} else {
+			menu.addItem((item) => item.setTitle('Set as current plan').setIcon('star')
+				.onClick(() => { data.currentPlanId = plan.id; void save(); }));
+		}
+		menu.addSeparator();
+		menu.addItem((item) => item.setTitle('New workout in this plan').setIcon('plus')
+			.onClick(() => { plan.collapsed = false; void this.createWorkout(plan.id); }));
+		menu.addItem((item) => item.setTitle('Add existing workouts…').setIcon('list-plus')
+			.onClick(() => new PlanWorkoutsModal(this.app, this.plugin, plan, () => this.render()).open()));
+		menu.addItem((item) => item.setTitle('Rename plan').setIcon('pencil')
+			.onClick(() => new RenameModal(this.app, plan.name, (name) => { plan.name = name; void save(); }, 'Rename Plan').open()));
+		if (planIdx > 0) {
+			menu.addItem((item) => item.setTitle('Move up').setIcon('arrow-up').onClick(() => {
+				[data.plans[planIdx - 1], data.plans[planIdx]] = [data.plans[planIdx], data.plans[planIdx - 1]]; void save();
+			}));
+		}
+		if (planIdx < data.plans.length - 1) {
+			menu.addItem((item) => item.setTitle('Move down').setIcon('arrow-down').onClick(() => {
+				[data.plans[planIdx], data.plans[planIdx + 1]] = [data.plans[planIdx + 1], data.plans[planIdx]]; void save();
+			}));
+		}
+		menu.addSeparator();
+		menu.addItem((item) => item.setTitle('Delete plan').setIcon('trash').setWarning(true).onClick(() => {
+			const what = count > 0 ? ` Its ${count} workout${count !== 1 ? 's' : ''} move to "No plan"; nothing else is deleted.` : '';
+			new ConfirmModal(this.app, `Delete plan "${plan.name}"?${what}`, () => {
+				for (const w of data.workouts) if (w.planId === plan.id) delete w.planId;
+				data.plans.splice(data.plans.indexOf(plan), 1);
+				if (data.currentPlanId === plan.id) delete data.currentPlanId;
+				void save();
+			}).open();
+		}));
+		menu.showAtMouseEvent(evt);
+	}
+
+	// ── Workout card ─────────────────────────────────────────────────────────
+
+	/** Workout card; tap to preview. `pinned` (Today) is always open with Start ready. */
+	private renderWorkoutCard(parent: HTMLElement, workout: Workout, idx: number, pinned = false): void {
+		const isExpanded = pinned || this.expandedWorkoutIndex === idx;
+		const card = parent.createDiv({ cls: 'wt-workout-card' });
+		if (isExpanded) card.addClass('wt-workout-card-expanded');
+		if (pinned) card.addClass('wt-today-card');
+
+		const cardBody = card.createDiv({ cls: 'wt-workout-card-body' });
+		if (!pinned) {
 			cardBody.addEventListener('click', () => {
 				this.expandedWorkoutIndex = isExpanded ? -1 : idx;
 				this.render();
 			});
+		}
 
-			cardBody.createEl('div', { text: workout.name, cls: 'wt-workout-card-name' });
+		cardBody.createEl('div', { text: workout.name, cls: 'wt-workout-card-name' });
 
-			const meta = cardBody.createDiv({ cls: 'wt-workout-card-meta' });
+		const meta = cardBody.createDiv({ cls: 'wt-workout-card-meta' });
+		const exCount = workout.exercises.length;
+		const setCount = workout.exercises.reduce((s, e) => s + e.sets.length, 0);
+		meta.createEl('span', { text: `${exCount} exercise${exCount !== 1 ? 's' : ''} · ${setCount} sets` });
+		if (workout.lastUpdatedDurationSeconds && workout.lastUpdatedDurationSeconds > 0) {
+			meta.createEl('span', { text: ` · ~${formatDurationShort(workout.lastUpdatedDurationSeconds)}`, cls: 'wt-workout-card-duration' });
+		}
+		if (!pinned && workout.planId && workout.days?.length) {
+			meta.createEl('span', { text: formatDays(workout.days), cls: 'wt-workout-card-days' });
+		}
 
-			// Exercise count
-			const exCount = workout.exercises.length;
-			const setCount = workout.exercises.reduce((s, e) => s + e.sets.length, 0);
-			meta.createEl('span', { text: `${exCount} exercise${exCount !== 1 ? 's' : ''} · ${setCount} sets` });
+		// Days since last completed
+		const lastDate = this.plugin.getLastCompletedDate(workout.name);
+		const lastRow = cardBody.createDiv({ cls: 'wt-workout-card-last' });
+		if (lastDate) {
+			const days = daysBetween(lastDate);
+			if (days === 0) lastRow.setText('Last done: today');
+			else if (days === 1) lastRow.setText('Last done: yesterday');
+			else lastRow.setText(`Last done: ${days} days ago`);
+		} else {
+			lastRow.setText('Never completed');
+			lastRow.addClass('wt-muted');
+		}
 
-			// Duration estimate
-			if (workout.lastUpdatedDurationSeconds && workout.lastUpdatedDurationSeconds > 0) {
-				meta.createEl('span', { text: ` · ~${formatDurationShort(workout.lastUpdatedDurationSeconds)}`, cls: 'wt-workout-card-duration' });
-			}
-
-			// Days since last completed
-			const lastDate = this.plugin.getLastCompletedDate(workout.name);
-			const lastRow = cardBody.createDiv({ cls: 'wt-workout-card-last' });
-			if (lastDate) {
-				const days = daysBetween(lastDate);
-				if (days === 0) {
-					lastRow.setText('Last done: today');
-				} else if (days === 1) {
-					lastRow.setText('Last done: yesterday');
-				} else {
-					lastRow.setText(`Last done: ${days} days ago`);
-				}
-			} else {
-				lastRow.setText('Never completed');
-				lastRow.addClass('wt-muted');
-			}
-
-			// Toggle arrow
+		if (!pinned) {
 			const arrow = cardBody.createDiv({ cls: 'wt-workout-card-arrow' });
 			setIcon(arrow, isExpanded ? 'chevron-down' : 'play');
+		}
 
-			// ── Expanded preview ──────────────────────────────────────────
-			if (isExpanded) {
-				const preview = card.createDiv({ cls: 'wt-workout-preview' });
-				const unit = this.plugin.data.settings.weightUnit;
+		if (!isExpanded) return;
+		const preview = card.createDiv({ cls: 'wt-workout-preview' });
+		const unit = this.plugin.data.settings.weightUnit;
+		if (workout.exercises.length === 0) {
+			preview.createEl('p', { text: 'No exercises yet. Edit this workout to add some.', cls: 'wt-muted' });
+		} else {
+			workout.exercises.forEach((ex) => {
+				const exRow = preview.createDiv({ cls: 'wt-preview-exercise' });
+				exRow.createEl('span', { text: ex.name, cls: 'wt-preview-exercise-name' });
+				const setInfo = ex.sets.length > 0
+					? `${ex.sets.length} × ${ex.sets[0].reps} reps${ex.sets[0].weight > 0 ? ` @ ${ex.sets[0].weight} ${unit}` : ''}`
+					: `${ex.sets.length} sets`;
+				exRow.createEl('span', { text: setInfo, cls: 'wt-preview-exercise-meta' });
+				if (ex.modifier) exRow.createEl('span', { text: ex.modifier, cls: 'wt-preview-modifier' });
+			});
+		}
 
-				if (workout.exercises.length === 0) {
-					preview.createEl('p', { text: 'No exercises yet. Edit this workout to add some.', cls: 'wt-muted' });
-				} else {
-					workout.exercises.forEach((ex) => {
-						const exRow = preview.createDiv({ cls: 'wt-preview-exercise' });
-						exRow.createEl('span', { text: ex.name, cls: 'wt-preview-exercise-name' });
-						const setInfo = ex.sets.length > 0
-							? `${ex.sets.length} × ${ex.sets[0].reps} reps${ex.sets[0].weight > 0 ? ` @ ${ex.sets[0].weight} ${unit}` : ''}`
-							: `${ex.sets.length} sets`;
-						exRow.createEl('span', { text: setInfo, cls: 'wt-preview-exercise-meta' });
-						if (ex.modifier) exRow.createEl('span', { text: ex.modifier, cls: 'wt-preview-modifier' });
-					});
-				}
-
-				const startBtn = preview.createEl('button', { text: 'Start Workout', cls: 'wt-btn wt-btn-start wt-preview-start-btn' });
-				startBtn.addEventListener('click', (e) => {
-					e.stopPropagation();
-					this.plugin.beginWorkout(workout);
-					if (this.plugin.activeState) this.navigateTo('active');
-				});
-			}
-		});
-
-		// ── New workout button at bottom ─────────────────────────────────────
-		const addBtn = container.createEl('button', { text: '+ New Workout', cls: 'wt-btn wt-home-add-btn' });
-		addBtn.addEventListener('click', async () => {
-			workouts.push({ name: `Workout ${workouts.length + 1}`, exercises: [], supersets: [] });
-			this.editWorkoutIndex = workouts.length - 1;
-			await this.plugin.savePluginData();
-			this.navigateTo('edit');
+		const startBtn = preview.createEl('button', { text: 'Start Workout', cls: 'wt-btn wt-btn-start wt-preview-start-btn' });
+		startBtn.addEventListener('click', (e) => {
+			e.stopPropagation();
+			this.plugin.beginWorkout(workout);
+			if (this.plugin.activeState) this.navigateTo('active');
 		});
 	}
 
@@ -799,13 +1088,34 @@ class WorkoutTrackerView extends ItemView {
 		} else {
 			if (this.editWorkoutIndex >= workouts.length) this.editWorkoutIndex = workouts.length - 1;
 			if (this.editWorkoutIndex < 0) this.editWorkoutIndex = 0;
-			workouts.forEach((w, i) => {
+			const addOption = (parent: HTMLElement, i: number) => {
+				const w = workouts[i];
 				let label = w.name;
+				if (w.planId && w.days?.length) label += ` · ${formatDays(w.days)}`;
 				if (w.lastUpdatedDurationSeconds != null && w.lastUpdatedDurationSeconds > 0)
 					label += ` (${formatDurationShort(w.lastUpdatedDurationSeconds)})`;
-				const opt = select.createEl('option', { text: label, value: String(i) });
+				const opt = parent.createEl('option', { text: label, value: String(i) });
 				if (i === this.editWorkoutIndex) opt.selected = true;
-			});
+			};
+			const plans = this.plugin.data.plans;
+			if (plans.length === 0) {
+				workouts.forEach((_, i) => addOption(select, i));
+			} else {
+				// Grouped by plan so the list stays scannable
+				for (const plan of plans) {
+					const indices = planWorkoutIndices(workouts, plan.id);
+					if (indices.length === 0) continue;
+					const group = select.createEl('optgroup');
+					group.label = plan.name;
+					indices.forEach((i) => addOption(group, i));
+				}
+				const loose = planWorkoutIndices(workouts, undefined);
+				if (loose.length > 0) {
+					const group = select.createEl('optgroup');
+					group.label = 'No plan';
+					loose.forEach((i) => addOption(group, i));
+				}
+			}
 		}
 		select.addEventListener('change', () => { this.editWorkoutIndex = parseInt(select.value); this.render(); });
 
@@ -825,6 +1135,7 @@ class WorkoutTrackerView extends ItemView {
 				const clone: Workout = JSON.parse(JSON.stringify(source));
 				clone.name = source.name + ' (Copy)';
 				delete clone.lastUpdatedDurationSeconds;
+				delete clone.days; // same plan, but don't double-book its days
 				const idMap = new Map<string, string>();
 				for (const ss of clone.supersets) { const newId = generateId(); idMap.set(ss.id, newId); ss.id = newId; }
 				for (const ex of clone.exercises) { if (ex.supersetGroupId && idMap.has(ex.supersetGroupId)) ex.supersetGroupId = idMap.get(ex.supersetGroupId); }
@@ -865,6 +1176,8 @@ class WorkoutTrackerView extends ItemView {
 			workout.name = nameInput.value || 'Untitled';
 			await this.plugin.savePluginData(); this.render();
 		});
+
+		this.renderPlanAndDays(editorSection, workout);
 
 		// ── Render exercises ─────────────────────────────────────────────────
 		const renderedGroups = new Set<string>();
@@ -914,6 +1227,55 @@ class WorkoutTrackerView extends ItemView {
 			this.plugin.beginWorkout(workout);
 			if (this.plugin.activeState) this.navigateTo('active');
 		});
+	}
+
+	/** Plan picker + weekday toggles for the workout being edited. */
+	private renderPlanAndDays(parent: HTMLElement, workout: Workout): void {
+		const data = this.plugin.data;
+		const NEW_PLAN = '__new__';
+
+		const planRow = parent.createDiv({ cls: 'wt-plan-row' });
+		planRow.createEl('label', { text: 'Plan', cls: 'wt-plan-row-label' });
+		const planSelect = planRow.createEl('select', { cls: 'wt-workout-select wt-plan-select' });
+		planSelect.createEl('option', { text: 'No plan', value: '' });
+		for (const plan of data.plans) {
+			const label = plan.id === data.currentPlanId ? `${plan.name} (current)` : plan.name;
+			planSelect.createEl('option', { text: label, value: plan.id });
+		}
+		planSelect.createEl('option', { text: '+ New plan…', value: NEW_PLAN });
+		planSelect.value = workout.planId ?? '';
+		planSelect.addEventListener('change', async () => {
+			const value = planSelect.value;
+			if (value === NEW_PLAN) {
+				planSelect.value = workout.planId ?? '';
+				this.promptNewPlan((plan) => { workout.planId = plan.id; });
+				return;
+			}
+			if (value) workout.planId = value; else delete workout.planId;
+			await this.plugin.savePluginData(); this.render();
+		});
+
+		if (!workout.planId) return;
+		const dayRow = parent.createDiv({ cls: 'wt-day-row' });
+		dayRow.createEl('label', { text: 'Days', cls: 'wt-plan-row-label' });
+		const toggles = dayRow.createDiv({ cls: 'wt-day-toggles' });
+		for (const day of WEEK_ORDER) {
+			const on = !!workout.days?.includes(day);
+			const btn = toggles.createEl('button', { text: WEEKDAY_SHORT[day], cls: 'wt-day-toggle' });
+			btn.toggleClass('is-active', on);
+			btn.setAttribute('aria-pressed', String(on));
+			btn.setAttribute('aria-label', WEEKDAY_LONG[day]);
+			// Update in place (no full re-render) so the editor doesn't jump
+			btn.addEventListener('click', async () => {
+				const days = new Set(workout.days ?? []);
+				if (days.has(day)) days.delete(day); else days.add(day);
+				if (days.size) workout.days = [...days].sort((a, b) => weekRank(a) - weekRank(b)); else delete workout.days;
+				const nowOn = days.has(day);
+				btn.toggleClass('is-active', nowOn);
+				btn.setAttribute('aria-pressed', String(nowOn));
+				await this.plugin.savePluginData();
+			});
+		}
 	}
 
 	/** Render a single exercise card with drag support */
@@ -2012,10 +2374,20 @@ class ImportDataModal extends Modal {
 			this.plugin.data.history = imported.history || [];
 			this.plugin.data.lastUsed = imported.lastUsed || {};
 			this.plugin.data.personalRecords = imported.personalRecords || {};
+			this.plugin.data.plans = Array.isArray(imported.plans) ? imported.plans : [];
+			this.plugin.data.currentPlanId = imported.currentPlanId;
+			this.plugin.data.noPlanCollapsed = imported.noPlanCollapsed;
 			if (imported.settings) {
 				this.plugin.data.settings = Object.assign({}, DEFAULT_SETTINGS, imported.settings);
 			}
 		} else {
+			// Merge plans — add those with ids that don't already exist (imported workouts reference them)
+			const existingPlanIds = new Set(this.plugin.data.plans.map(p => p.id));
+			for (const p of (Array.isArray(imported.plans) ? imported.plans : [])) {
+				if (p && !existingPlanIds.has(p.id)) this.plugin.data.plans.push(p);
+			}
+			if (!this.plugin.data.currentPlanId && imported.currentPlanId) this.plugin.data.currentPlanId = imported.currentPlanId;
+
 			// Merge workouts — add those with names that don't already exist
 			const existingNames = new Set(this.plugin.data.workouts.map(w => w.name));
 			for (const w of (imported.workouts || [])) {
@@ -2036,6 +2408,7 @@ class ImportDataModal extends Modal {
 			Object.assign(this.plugin.data.lastUsed, imported.lastUsed || {});
 		}
 
+		this.plugin.normalizeData();
 		// Rebuild PRs from merged/replaced history
 		this.plugin.rebuildAllPRs();
 		await this.plugin.savePluginData();

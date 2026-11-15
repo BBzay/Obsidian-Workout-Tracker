@@ -1432,3 +1432,261 @@
 .wt-exercise-navigation { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
 .wt-exercise-navigation .wt-btn { white-space: normal; text-align: left; min-height: 40px; }
 .wt-upcoming-section { max-height: 340px; overflow-y: auto; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PLANS + TODAY (home screen)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wt-today {
+  margin-bottom: 18px;
+}
+
+.wt-today-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.wt-today-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-accent);
+}
+
+.wt-today-plan {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wt-today-cards {
+  margin-bottom: 0;
+}
+
+.wt-today-card {
+  border-color: var(--interactive-accent);
+  border-width: 2px;
+}
+
+.wt-today-card .wt-workout-card-body {
+  cursor: default;
+}
+
+.wt-today-card .wt-workout-card-name {
+  padding-right: 0;
+}
+
+.wt-rest-card {
+  padding: 14px 16px;
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-secondary);
+}
+
+.wt-rest-title {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.wt-rest-next {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.wt-today-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 12px 14px;
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: 10px;
+}
+
+.wt-plan-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.wt-plan-group {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.wt-plan-current {
+  border-color: var(--interactive-accent);
+}
+
+.wt-plan-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  min-height: 52px;
+  cursor: pointer;
+  background: var(--background-secondary);
+  user-select: none;
+}
+
+.wt-plan-header:hover {
+  background: var(--background-modifier-hover);
+}
+
+.wt-plan-header:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
+
+.wt-plan-chevron {
+  display: flex;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.wt-plan-title-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.wt-plan-title-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wt-plan-name {
+  font-weight: 700;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wt-plan-none .wt-plan-name {
+  color: var(--text-muted);
+}
+
+.wt-plan-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.wt-plan-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.wt-plan-menu-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wt-plan-menu-btn:hover {
+  color: var(--text-normal);
+}
+
+.wt-plan-workouts {
+  padding: 10px;
+  margin-bottom: 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.wt-plan-empty {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 4px 4px 2px;
+}
+
+.wt-workout-card-days {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-accent);
+  background: var(--background-modifier-hover);
+  white-space: nowrap;
+}
+
+.wt-home-bottom-row {
+  display: flex;
+  gap: 8px;
+}
+
+.wt-home-bottom-row .wt-home-add-btn {
+  flex: 1;
+}
+
+/* ─── Plan + days (edit mode) ─────────────────────────────────────────────── */
+
+.wt-plan-row,
+.wt-day-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.wt-day-row {
+  margin-bottom: 16px;
+}
+
+.wt-plan-row-label {
+  width: 40px;
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.wt-plan-select {
+  flex: 1;
+}
+
+.wt-day-toggles {
+  display: flex;
+  flex: 1;
+  gap: 4px;
+}
+
+.wt-day-toggle {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 2px;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--interactive-normal);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wt-day-toggle.is-active {
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.wt-plan-pick-list {
+  max-height: 50vh;
+  overflow-y: auto;
+}

@@ -1,12 +1,12 @@
 {
   "name": "my-obsidian-plugin",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "A custom Obsidian plugin for desktop and mobile.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-    "test": "node test-active.cjs && node test-daily.cjs"
+    "test": "node test-active.cjs && node test-daily.cjs && node test-plans.cjs"
   },
   "keywords": [],
   "author": "",

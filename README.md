@@ -9,6 +9,14 @@ A full-featured workout ledger plugin for Obsidian that works on both desktop an
 - Each workout card shows exercise/set count, estimated duration, and days since last completed
 - Tap any workout to immediately start a session
 
+### Plans & Weekly Schedule
+- Group workouts into **plans** (e.g. "Summer Strength") that fold up on the Home screen, so a long list stays tidy
+- Put each workout on one or more **weekdays** (Edit → Days)
+- Mark one plan as **current**: today's workout from that plan sits at the top of Home, open and ready to start
+- On rest days, Home shows what's next ("Next up: Pull Day tomorrow")
+- Plan menu (⋯): set as current, new workout in plan, add existing workouts, rename, reorder, delete (workouts move to "No plan", nothing else is lost)
+- Command: **Start today's workout**
+
 ### Active Workout Mode
 - Step-by-step guided workout with a progress bar
 - Built-in rest timer with configurable duration
@@ -117,6 +125,12 @@ Finishing a workout now writes one sentence to that day's daily-note Log immedia
 Startup, imported history and externally synced plugin data also synchronize summaries. Failed daily-note writes keep workout history intact and retry every minute while Obsidian is open; the Sync workout summaries to daily notes command repairs/backfills entries on demand. Stable workout markers update older Atlas entries without duplicates; existing Atlas, frontmatter and Journal prose stay untouched. Defaults use Journal/YYYY-MM-DD.md and Home/Templates/Daily note.md, configurable in Workout Ledger settings. New sessions retain their local completion date/time across time zones. Active sessions remain in memory as before; finish before reloading.
 
 Validation: `npm run build`, `node test-active.cjs`, `node test-daily.cjs`, `node --check main.js`. Published through BRAT. After completing any active workout, run BRAT update check, restart Obsidian and confirm version 1.5.0. Actual phone operation requires device verification.
+
+## 1.6.0 changes
+
+Plans group workouts into foldable sections on Home (fold state is remembered). Each workout can belong to one plan and be assigned weekdays in Edit mode. One plan is "current": its workout for today appears at the top of Home with Start ready, rest days show the next scheduled workout, and the "Start today's workout" command starts it directly (it never replaces a workout already in progress). Workouts outside any plan appear under "No plan"; with no plans at all, Home looks as before. History, PRs and remembered weights are untouched because plan membership is stored on the workout. Export/import carries plans.
+
+Validation: `npm run build`, `npm test` (`test-active.cjs`, `test-daily.cjs`, `test-plans.cjs`), `node --check main.js`. Published through BRAT. After completing any active workout, run BRAT update check, restart Obsidian and confirm version 1.6.0. Actual phone operation requires device verification.
 
 ## Release delivery
 
