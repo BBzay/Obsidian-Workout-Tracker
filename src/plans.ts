@@ -54,6 +54,17 @@ export function planWorkoutIndices(workouts: Schedulable[], planId: string | und
 	return indices.sort((a, b) => firstDay(a) - firstDay(b) || a - b);
 }
 
+/** Trimmed, non-empty locations, deduped case-insensitively (first spelling wins), sorted A–Z. */
+export function distinctLocations(values: Array<string | undefined>): string[] {
+	const byKey = new Map<string, string>();
+	for (const raw of values) {
+		const loc = typeof raw === 'string' ? raw.trim() : '';
+		const key = loc.toLowerCase();
+		if (loc && !byKey.has(key)) byKey.set(key, loc);
+	}
+	return [...byKey.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+}
+
 /** Repair plan data from older versions, imports, or hand edits. Mutates `data`. */
 export function normalizePlanData(data: { plans?: unknown; currentPlanId?: string; workouts: Schedulable[] }): void {
 	const seen = new Set<string>();

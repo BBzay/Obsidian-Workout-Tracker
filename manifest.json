@@ -1,7 +1,7 @@
 {
   "id": "workout-ledger",
   "name": "Workout Ledger",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "minAppVersion": "1.4.0",
   "description": "Plan workout templates, track active sessions with timers, and review your workout history.",
   "author": "BBzay",

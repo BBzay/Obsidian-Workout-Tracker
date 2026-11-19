@@ -205,6 +205,16 @@ function planWorkoutIndices(workouts, planId) {
   };
   return indices.sort((a, b) => firstDay(a) - firstDay(b) || a - b);
 }
+function distinctLocations(values) {
+  const byKey = /* @__PURE__ */ new Map();
+  for (const raw of values) {
+    const loc = typeof raw === "string" ? raw.trim() : "";
+    const key = loc.toLowerCase();
+    if (loc && !byKey.has(key))
+      byKey.set(key, loc);
+  }
+  return [...byKey.values()].sort((a, b) => a.localeCompare(b, void 0, { sensitivity: "base" }));
+}
 function normalizePlanData(data) {
   const seen = /* @__PURE__ */ new Set();
   const plans = [];
@@ -325,9 +335,28 @@ function buildSteps(workout) {
       }
     }
   }
-  if (steps.length > 0)
-    steps[steps.length - 1].restSeconds = 0;
   return steps;
+}
+function nextOpenStep(state, from) {
+  const done = new Set(state.stepHistory.map((h) => h.stepIndex));
+  const n = state.steps.length;
+  for (let k = 1; k <= n; k++) {
+    const i = (from + k) % n;
+    if (!done.has(i))
+      return i;
+  }
+  return -1;
+}
+function applyLoggedSetsToTemplate(template, logged) {
+  for (const { exerciseIndex, exerciseName, setIndex, set } of logged) {
+    const byIndex = template.exercises[exerciseIndex];
+    const ex = (byIndex == null ? void 0 : byIndex.name) === exerciseName ? byIndex : template.exercises.find((e) => e.name === exerciseName);
+    const target = ex == null ? void 0 : ex.sets[setIndex];
+    if (target) {
+      target.reps = set.reps;
+      target.weight = set.weight;
+    }
+  }
 }
 function shortDate(isoStr) {
   const d = new Date(isoStr);
@@ -486,6 +515,43 @@ var ConfirmModal = class extends import_obsidian2.Modal {
     confirmBtn.addEventListener("click", () => {
       this.onConfirm();
       this.close();
+    });
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var EndWorkoutModal = class extends import_obsidian2.Modal {
+  constructor(app, detail, onSave, onDiscard) {
+    super(app);
+    this.detail = detail;
+    this.onSave = onSave;
+    this.onDiscard = onDiscard;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.addClass("wt-end-modal");
+    contentEl.createEl("h3", { text: "End workout?" });
+    contentEl.createEl("p", { text: this.detail, cls: "wt-end-detail" });
+    const warning = contentEl.createDiv();
+    const btnRow = contentEl.createDiv({ cls: "wt-modal-buttons" });
+    btnRow.createEl("button", { text: "Keep going" }).addEventListener("click", () => this.close());
+    const discardBtn = btnRow.createEl("button", { text: "Discard", cls: "mod-warning" });
+    let armed = false;
+    discardBtn.addEventListener("click", () => {
+      if (!armed) {
+        armed = true;
+        discardBtn.setText("Tap again to discard");
+        warning.createEl("p", { text: "Nothing from this session will be saved: no history, PRs or daily-note entry, and remembered weights go back to what they were.", cls: "wt-end-warning" });
+        return;
+      }
+      this.close();
+      this.onDiscard();
+    });
+    const saveBtn = btnRow.createEl("button", { text: "Save workout", cls: "mod-cta" });
+    saveBtn.addEventListener("click", () => {
+      this.close();
+      this.onSave();
     });
   }
   onClose() {
@@ -702,6 +768,11 @@ var WorkoutTrackerPlugin = class extends import_obsidian2.Plugin {
     for (const w of d.workouts) {
       if (!w.supersets)
         w.supersets = [];
+      const location = typeof w.location === "string" ? w.location.trim() : "";
+      if (location)
+        w.location = location;
+      else
+        delete w.location;
     }
     normalizePlanData(d);
   }
@@ -767,6 +838,12 @@ var WorkoutTrackerPlugin = class extends import_obsidian2.Plugin {
     const names = next.indices.map((i) => this.data.workouts[i].name).join(" + ");
     return next.offset === 1 ? `${names} tomorrow` : `${names} on ${WEEKDAY_LONG[(today + next.offset) % 7]}`;
   }
+  /** Distinct locations of the next scheduled workout(s); empty if none are set. */
+  nextWorkoutLocations(date = /* @__PURE__ */ new Date()) {
+    var _a;
+    const next = nextScheduled(this.data.workouts, (_a = this.getCurrentPlan()) == null ? void 0 : _a.id, date.getDay());
+    return next ? distinctLocations(next.indices.map((i) => this.data.workouts[i].location)) : [];
+  }
   async startTodaysWorkout() {
     if (this.activeState) {
       new import_obsidian2.Notice("A workout is already in progress.");
@@ -803,6 +880,10 @@ var WorkoutTrackerPlugin = class extends import_obsidian2.Plugin {
   }
   beginWorkout(workout) {
     var _a, _b, _c, _d;
+    if (this.activeState) {
+      new import_obsidian2.Notice("A workout is already in progress. End it first.");
+      return;
+    }
     if (workout.exercises.length === 0) {
       new import_obsidian2.Notice("This workout has no exercises. Add some first!");
       return;
@@ -835,8 +916,23 @@ var WorkoutTrackerPlugin = class extends import_obsidian2.Plugin {
       isPaused: false,
       pauseStartTime: 0,
       totalPausedMs: 0,
-      stepHistory: []
+      stepHistory: [],
+      lastUsedBefore: {}
     };
+  }
+  /** Drop the running session. Nothing reaches history; remembered weights it changed are restored. */
+  async discardActiveWorkout() {
+    const state = this.activeState;
+    if (!state)
+      return;
+    for (const [key, before] of Object.entries(state.lastUsedBefore)) {
+      if (before)
+        this.data.lastUsed[key] = before;
+      else
+        delete this.data.lastUsed[key];
+    }
+    this.activeState = null;
+    await this.savePluginData();
   }
   getAllExerciseNames() {
     const names = /* @__PURE__ */ new Set();
@@ -924,6 +1020,8 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
     this.timerIntervalId = null;
     this.dragSourceIndex = -1;
     this.restAlertFired = false;
+    /** Step just completed, so the workout plan animates it to green once. */
+    this.justCompletedStep = -1;
     this.datalistId = "wt-exercise-datalist-" + generateId();
     this.completedWorkout = null;
     this.completedPRs = [];
@@ -1102,6 +1200,9 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
     if (next) {
       rest.createDiv({ text: "Rest day", cls: "wt-rest-title" });
       rest.createDiv({ text: `Next up: ${next}`, cls: "wt-rest-next" });
+      const places = this.plugin.nextWorkoutLocations(now);
+      if (places.length > 0)
+        this.renderLocationLine(rest, "wt-rest-location", places.join(" \xB7 "));
     } else {
       rest.createDiv({ text: "No days scheduled yet", cls: "wt-rest-title" });
       rest.createDiv({ text: `Edit a workout in ${plan.name} and pick its days.`, cls: "wt-rest-next" });
@@ -1249,6 +1350,8 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
       });
     }
     cardBody.createEl("div", { text: workout.name, cls: "wt-workout-card-name" });
+    if (workout.location)
+      this.renderLocationLine(cardBody, "wt-workout-card-location", workout.location);
     const meta = cardBody.createDiv({ cls: "wt-workout-card-meta" });
     const exCount = workout.exercises.length;
     const setCount = workout.exercises.reduce((s, e) => s + e.sets.length, 0);
@@ -1300,6 +1403,14 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
       if (this.plugin.activeState)
         this.navigateTo("active");
     });
+  }
+  /** Map-pin icon + location text (plain, not a link). */
+  renderLocationLine(parent, cls, text) {
+    const line = parent.createDiv({ cls });
+    const icon = line.createSpan({ cls: "wt-location-icon" });
+    icon.setAttribute("aria-hidden", "true");
+    (0, import_obsidian2.setIcon)(icon, "map-pin");
+    line.createSpan({ text, cls: "wt-location-text", attr: { title: text } });
   }
   // ═══════════════════════════════════════════════════════════════════════════
   // EDIT MODE
@@ -1431,6 +1542,7 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
       await this.plugin.savePluginData();
       this.render();
     });
+    this.renderLocation(editorSection, workout);
     this.renderPlanAndDays(editorSection, workout);
     const renderedGroups = /* @__PURE__ */ new Set();
     const unit = this.plugin.data.settings.weightUnit;
@@ -1543,6 +1655,37 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
         await this.plugin.savePluginData();
       });
     }
+  }
+  /** Free-text location; suggests places other workouts already use. */
+  renderLocation(parent, workout) {
+    var _a;
+    const inputId = "wt-location-" + generateId();
+    const row = parent.createDiv({ cls: "wt-plan-row wt-location-row" });
+    row.createEl("label", { text: "Location", cls: "wt-plan-row-label", attr: { for: inputId } });
+    const input = row.createEl("input", {
+      cls: "wt-location-input",
+      type: "text",
+      value: (_a = workout.location) != null ? _a : "",
+      placeholder: "e.g. Home gym"
+    });
+    input.id = inputId;
+    const others = distinctLocations(this.plugin.data.workouts.filter((w) => w !== workout).map((w) => w.location));
+    if (others.length > 0) {
+      const list = row.createEl("datalist");
+      list.id = inputId + "-list";
+      for (const loc of others)
+        list.createEl("option", { value: loc });
+      input.setAttribute("list", list.id);
+    }
+    input.addEventListener("change", async () => {
+      const location = input.value.trim();
+      input.value = location;
+      if (location)
+        workout.location = location;
+      else
+        delete workout.location;
+      await this.plugin.savePluginData();
+    });
   }
   /** Render a single exercise card with drag support */
   renderExerciseCard(parent, workout, exercise, exIdx, unit) {
@@ -1756,10 +1899,8 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
     header.createEl("span", { text: workout.name, cls: "wt-active-title" });
     header.createEl("span", { text: `Time spent: ${formatTime(workoutElapsedSeconds(state))}`, cls: "wt-total-time" });
     const endBtn = header.createEl("button", { text: "End", cls: "wt-btn wt-btn-danger wt-btn-sm" });
-    endBtn.addEventListener("click", () => {
-      new ConfirmModal(this.app, "End this workout early?", () => this.finishWorkout()).open();
-    });
-    const done = state.currentStepIndex + (state.isResting ? 1 : 0);
+    endBtn.addEventListener("click", () => this.openEndDialog());
+    const done = state.stepHistory.length;
     const progressContainer = container.createDiv({ cls: "wt-progress-container" });
     const progressBar = progressContainer.createDiv({ cls: "wt-progress-bar" });
     progressBar.style.width = `${total > 0 ? done / total * 100 : 0}%`;
@@ -1796,6 +1937,11 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
         (0, import_obsidian2.setIcon)(backBtn, "undo");
         backBtn.addEventListener("click", () => this.goBackToLastSet());
       }
+    } else if (nextOpenStep(state, state.currentStepIndex) === -1) {
+      panel.addClass("wt-set-panel");
+      panel.createEl("div", { text: "All sets logged", cls: "wt-set-title" });
+      const saveBtn = panel.createEl("button", { text: "End workout", cls: "wt-btn wt-btn-complete" });
+      saveBtn.addEventListener("click", () => this.openEndDialog());
     } else if (currentEx && currentSet) {
       panel.addClass("wt-set-panel");
       if (currentEx.supersetGroupId)
@@ -1840,48 +1986,105 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
       nextCard.createEl("span", { text: "Next: ", cls: "wt-next-label" });
       nextCard.createEl("span", { text: nextInfo });
     }
-    const remainingSteps = state.steps.slice(state.currentStepIndex + 1);
-    if (remainingSteps.length > 0) {
-      const upcomingSection = container.createEl("details", { cls: "wt-upcoming-section" });
-      upcomingSection.open = true;
-      upcomingSection.createEl("summary", { text: `Upcoming (${remainingSteps.length} set${remainingSteps.length !== 1 ? "s" : ""} remaining)` });
-      upcomingSection.createEl("p", { text: state.setStarted && !state.isResting ? "Finish or skip the current set to choose another exercise." : "Choose an available exercise. Other unfinished sets stay in the queue.", cls: "wt-muted" });
-      const navigation = upcomingSection.createDiv({ cls: "wt-exercise-navigation" });
-      for (const exerciseIndex of [...new Set(remainingSteps.map((s) => s.exerciseIndex))]) {
-        const choose = navigation.createEl("button", { text: `${state.isResting ? "Do next" : "Choose"}: ${workout.exercises[exerciseIndex].name}`, cls: "wt-btn wt-btn-sm" });
-        choose.disabled = state.isPaused || state.setStarted && !state.isResting;
-        this.registerDomEvent(choose, "click", () => this.chooseExercise(exerciseIndex));
-      }
-      let lastExName = "";
-      for (const rs of remainingSteps) {
-        const ex = workout.exercises[rs.exerciseIndex];
-        const row = upcomingSection.createDiv({ cls: "wt-upcoming-row" });
-        if (ex.name !== lastExName) {
-          row.addClass("wt-upcoming-new-exercise");
-          lastExName = ex.name;
-        }
-        row.createEl("span", { text: `${ex.name} \u2014 Set ${rs.setIndex + 1}` });
-        if (rs.restSeconds > 0)
-          row.createEl("span", { text: `${rs.restSeconds}s rest`, cls: "wt-muted" });
-      }
-    }
+    this.renderWorkoutPlan(container, state);
     this.renderPreviousSets(container, state);
     this.startActiveTimer();
   }
+  /** The whole workout in plan order. Done sets fade green; tap a set or an exercise to go there. */
+  renderWorkoutPlan(container, state) {
+    var _a, _b;
+    const { workout, steps } = state;
+    const done = new Set(state.stepHistory.map((h) => h.stepIndex));
+    const running = state.setStarted && !state.isResting;
+    const locked = state.isPaused || running;
+    const current = state.isResting ? -1 : state.currentStepIndex;
+    const upNext = this.getUpNextStep(state);
+    const justDone = this.justCompletedStep;
+    this.justCompletedStep = -1;
+    const unit = this.plugin.data.settings.weightUnit;
+    const byExercise = /* @__PURE__ */ new Map();
+    steps.forEach((s, i) => {
+      const list = byExercise.get(s.exerciseIndex);
+      if (list)
+        list.push(i);
+      else
+        byExercise.set(s.exerciseIndex, [i]);
+    });
+    const section = container.createDiv({ cls: "wt-workout-plan" });
+    const head = section.createDiv({ cls: "wt-workout-plan-head" });
+    head.createSpan({ text: "Workout plan", cls: "wt-workout-plan-title" });
+    const left = steps.length - done.size;
+    head.createSpan({ text: left === 0 ? "All done" : `${left} set${left !== 1 ? "s" : ""} left`, cls: "wt-workout-plan-count" });
+    const hint = state.isPaused ? "Resume to move around the workout." : running ? "Finish or skip this set to jump somewhere else." : state.isResting ? "Tap any set to do it next." : "Tap any set to jump to it.";
+    section.createDiv({ text: hint, cls: "wt-workout-plan-hint" });
+    let prevGroup;
+    for (const [exIdx, idxs] of byExercise) {
+      const ex = workout.exercises[exIdx];
+      if (ex.supersetGroupId && ex.supersetGroupId !== prevGroup)
+        section.createDiv({ text: "Superset", cls: "wt-workout-plan-ss" });
+      prevGroup = ex.supersetGroupId;
+      const doneCount = idxs.filter((i) => done.has(i)).length;
+      const exDone = doneCount === idxs.length;
+      const firstOpen = (_a = idxs.find((i) => !done.has(i))) != null ? _a : -1;
+      const item = section.createDiv({ cls: "wt-workout-plan-item" });
+      if (ex.supersetGroupId)
+        item.addClass("is-superset");
+      if (exDone)
+        item.addClass("is-done");
+      else if (doneCount > 0)
+        item.addClass("is-partial");
+      if (idxs.includes(current))
+        item.addClass("is-current");
+      else if (upNext !== -1 && idxs.includes(upNext))
+        item.addClass("is-next");
+      if (exDone && idxs.includes(justDone))
+        item.addClass("wt-just-done");
+      const main = item.createEl("button", { cls: "wt-workout-plan-main" });
+      const status = main.createSpan({ cls: "wt-workout-plan-status" });
+      if (exDone)
+        (0, import_obsidian2.setIcon)(status, "check");
+      const text = main.createSpan({ cls: "wt-workout-plan-text" });
+      text.createSpan({ text: ex.name, cls: "wt-workout-plan-name" });
+      const first = ex.sets[0];
+      let target = `${ex.sets.length} \xD7 ${(_b = first == null ? void 0 : first.reps) != null ? _b : 0}${first && first.weight > 0 ? ` @ ${first.weight} ${unit}` : ""}`;
+      if (ex.modifier)
+        target += ` \xB7 ${ex.modifier}`;
+      const meta = exDone ? `All ${idxs.length} set${idxs.length !== 1 ? "s" : ""} done` : doneCount > 0 ? `${doneCount} of ${idxs.length} done` : target;
+      text.createSpan({ text: meta, cls: "wt-workout-plan-meta" });
+      main.disabled = locked || exDone || firstOpen === current;
+      if (!main.disabled)
+        main.setAttribute("title", `${state.isResting ? "Do next" : "Go to"}: set ${steps[firstOpen].setIndex + 1}`);
+      main.addEventListener("click", () => this.jumpToStep(firstOpen));
+      const pills = item.createDiv({ cls: "wt-workout-plan-sets" });
+      for (const i of idxs) {
+        const setNo = steps[i].setIndex + 1;
+        const isDone = done.has(i);
+        const pill = pills.createEl("button", { text: String(setNo), cls: "wt-set-pill" });
+        if (isDone)
+          pill.addClass("is-done");
+        if (i === current)
+          pill.addClass("is-current");
+        else if (i === upNext)
+          pill.addClass("is-next");
+        if (isDone && i === justDone)
+          pill.addClass("wt-just-done");
+        pill.disabled = locked || isDone || i === current;
+        const label = isDone ? "done" : i === current ? "current" : i === upNext ? "up next" : "not done";
+        pill.setAttribute("aria-label", `${ex.name} set ${setNo}, ${label}`);
+        pill.addEventListener("click", () => this.jumpToStep(i));
+      }
+    }
+  }
   renderPreviousSets(container, state) {
-    const allSets = [];
-    for (const cex of state.completedExercises)
-      for (let i = 0; i < cex.sets.length; i++)
-        allSets.push({ exerciseName: cex.name, setNum: i + 1, cs: cex.sets[i] });
-    if (allSets.length === 0)
+    if (state.stepHistory.length === 0)
       return;
     const section = container.createDiv({ cls: "wt-previous-sets" });
     section.createEl("div", { text: "Completed Sets", cls: "wt-prev-heading" });
     const unit = this.plugin.data.settings.weightUnit;
-    for (let i = allSets.length - 1; i >= 0; i--) {
-      const { exerciseName, setNum, cs } = allSets[i];
+    for (let i = state.stepHistory.length - 1; i >= 0; i--) {
+      const { stepIndex, exerciseName, completedSet: cs } = state.stepHistory[i];
       const setRow = section.createDiv({ cls: "wt-prev-set-row" });
-      setRow.createEl("span", { text: `${exerciseName} S${setNum}: `, cls: "wt-prev-set-label" });
+      setRow.createEl("span", { text: `${exerciseName} S${state.steps[stepIndex].setIndex + 1}: `, cls: "wt-prev-set-label" });
       const rInput = setRow.createEl("input", { type: "number", value: String(cs.reps), cls: "wt-prev-input" });
       setRow.createEl("span", { text: " reps \xD7 " });
       const wInput = setRow.createEl("input", { type: "number", value: String(cs.weight), cls: "wt-prev-input" });
@@ -1894,9 +2097,16 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
       });
     }
   }
+  /** Step after the current one: the set picked during rest, else the next unfinished one in plan order. -1 if none. */
+  getUpNextStep(state) {
+    if (state.isResting && state.nextStepIndex !== void 0)
+      return state.nextStepIndex;
+    const next = nextOpenStep(state, state.currentStepIndex);
+    return next === state.currentStepIndex ? -1 : next;
+  }
   getNextSetInfo(state) {
-    const nextIdx = state.currentStepIndex + 1;
-    if (nextIdx >= state.steps.length)
+    const nextIdx = this.getUpNextStep(state);
+    if (nextIdx === -1)
       return null;
     const nextStep = state.steps[nextIdx];
     const nextEx = state.workout.exercises[nextStep.exerciseIndex];
@@ -1938,27 +2148,41 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
         el.setText(formatTime(state.setElapsed));
     }
   }
+  /** The running session, or null while a finish is saving (so taps can't change what gets saved). */
+  session() {
+    return this.finishingWorkout ? null : this.plugin.activeState;
+  }
   async completeCurrentSet() {
-    const state = this.plugin.activeState;
+    const state = this.session();
     if (!state || !state.setStarted || state.isResting || state.isPaused)
       return;
     state.setStarted = false;
     state.setElapsed = Math.floor((Date.now() - state.currentSetStartTime) / 1e3);
-    const step = state.steps[state.currentStepIndex];
+    const stepIndex = state.currentStepIndex;
+    const step = state.steps[stepIndex];
     const currentEx = state.workout.exercises[step.exerciseIndex];
     const cs = { reps: state.currentReps, weight: state.currentWeight, setSeconds: state.setElapsed, actualRestSeconds: 0 };
     const key = lastUsedKey(state.workout.name, currentEx.name, step.setIndex);
+    if (!(key in state.lastUsedBefore)) {
+      const before = this.plugin.data.lastUsed[key];
+      state.lastUsedBefore[key] = before ? { ...before } : null;
+    }
     this.plugin.data.lastUsed[key] = { reps: state.currentReps, weight: state.currentWeight };
-    await this.plugin.savePluginData();
     let completedEx = state.completedExercises.find((e) => e.name === currentEx.name);
     if (!completedEx) {
       completedEx = { name: currentEx.name, sets: [] };
       state.completedExercises.push(completedEx);
     }
-    completedEx.sets.push(cs);
-    state.stepHistory.push({ stepIndex: state.currentStepIndex, completedSet: { ...cs }, exerciseName: currentEx.name });
-    if (state.currentStepIndex === state.steps.length - 1) {
-      this.finishWorkout();
+    const planPos = (s) => {
+      var _a, _b;
+      return (_b = (_a = state.stepHistory.find((e) => e.completedSet === s)) == null ? void 0 : _a.stepIndex) != null ? _b : Number.MAX_SAFE_INTEGER;
+    };
+    const at = completedEx.sets.findIndex((s) => planPos(s) > stepIndex);
+    completedEx.sets.splice(at < 0 ? completedEx.sets.length : at, 0, cs);
+    state.stepHistory.push({ stepIndex, completedSet: cs, exerciseName: currentEx.name });
+    this.justCompletedStep = stepIndex;
+    if (nextOpenStep(state, stepIndex) === -1) {
+      await this.finishWorkout();
       return;
     }
     if (step.restSeconds > 0) {
@@ -1970,27 +2194,44 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
     } else {
       this.advanceToNextStep();
     }
+    await this.plugin.savePluginData();
   }
   advanceFromRest() {
-    const state = this.plugin.activeState;
-    if (!state)
+    const state = this.session();
+    if (!state || !state.isResting)
       return;
     const lastEntry = state.stepHistory[state.stepHistory.length - 1];
-    const lastCex = state.completedExercises.find((e) => e.name === (lastEntry == null ? void 0 : lastEntry.exerciseName));
-    if (lastCex && lastCex.sets.length > 0)
-      lastCex.sets[lastCex.sets.length - 1].actualRestSeconds = Math.floor((Date.now() - state.restStartTime) / 1e3);
+    if (lastEntry)
+      lastEntry.completedSet.actualRestSeconds = Math.floor((Date.now() - state.restStartTime) / 1e3);
     state.isResting = false;
-    this.advanceToNextStep();
+    const chosen = state.nextStepIndex;
+    delete state.nextStepIndex;
+    const chosenOpen = chosen !== void 0 && !state.stepHistory.some((h) => h.stepIndex === chosen);
+    const target = chosenOpen ? chosen : nextOpenStep(state, state.currentStepIndex);
+    if (target === -1) {
+      void this.finishWorkout();
+      return;
+    }
+    state.currentStepIndex = target;
+    this.prepareCurrentSet();
     this.startCurrentSet();
   }
+  /** After a set with no rest: go to the next unfinished set in plan order. */
   advanceToNextStep() {
     const state = this.plugin.activeState;
     if (!state)
       return;
-    state.currentStepIndex++;
-    if (state.currentStepIndex >= state.steps.length)
+    const next = nextOpenStep(state, state.currentStepIndex);
+    if (next === -1)
       return;
+    state.currentStepIndex = next;
     this.prepareCurrentSet();
+  }
+  /** Keep what was typed for the current set, so coming back to it restores it. */
+  saveDraft(state) {
+    const step = state.steps[state.currentStepIndex];
+    if (step)
+      state.setDrafts[`${step.exerciseIndex}:${step.setIndex}`] = { reps: state.currentReps, weight: state.currentWeight };
   }
   prepareCurrentSet() {
     var _a, _b, _c, _d, _e;
@@ -2012,45 +2253,53 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
     this.render();
   }
   startCurrentSet() {
-    const state = this.plugin.activeState;
+    const state = this.session();
     if (!state || state.setStarted || state.isPaused || state.isResting)
+      return;
+    if (state.stepHistory.some((h) => h.stepIndex === state.currentStepIndex))
       return;
     state.setStarted = true;
     state.setElapsed = 0;
     state.currentSetStartTime = Date.now();
     this.render();
   }
-  chooseExercise(exerciseIndex) {
-    const state = this.plugin.activeState;
+  /**
+   * Tap in the workout plan. Ready: go to that set now. Resting: make it the next set (rest keeps running).
+   * Ignored while a set is running or paused, and for sets already done. Plan order never changes.
+   */
+  jumpToStep(index) {
+    const state = this.session();
     if (!state || state.isPaused || state.setStarted && !state.isResting)
       return;
-    const start = state.currentStepIndex + (state.isResting ? 1 : 0);
-    const pending = state.steps.slice(start);
-    const chosen = pending.filter((s) => s.exerciseIndex === exerciseIndex);
-    if (!chosen.length)
+    if (index < 0 || index >= state.steps.length || state.stepHistory.some((h) => h.stepIndex === index))
       return;
-    if (!state.isResting) {
-      const step = state.steps[state.currentStepIndex];
-      state.setDrafts[`${step.exerciseIndex}:${step.setIndex}`] = { reps: state.currentReps, weight: state.currentWeight };
-    }
-    state.steps.splice(start, pending.length, ...chosen, ...pending.filter((s) => s.exerciseIndex !== exerciseIndex));
-    if (state.isResting)
+    if (state.isResting) {
+      state.nextStepIndex = index;
       this.render();
-    else
-      this.prepareCurrentSet();
-  }
-  skipCurrentSet() {
-    const state = this.plugin.activeState;
-    if (!state)
-      return;
-    if (state.currentStepIndex === state.steps.length - 1) {
-      this.finishWorkout();
       return;
     }
-    this.advanceToNextStep();
+    if (index === state.currentStepIndex)
+      return;
+    this.saveDraft(state);
+    state.currentStepIndex = index;
+    this.prepareCurrentSet();
+  }
+  /** Leave this set unfinished and go to the next unfinished one (wrapping). With nothing else left, offer to end. */
+  skipCurrentSet() {
+    const state = this.session();
+    if (!state || state.isPaused || state.isResting)
+      return;
+    const next = nextOpenStep(state, state.currentStepIndex);
+    if (next === -1 || next === state.currentStepIndex) {
+      this.openEndDialog();
+      return;
+    }
+    this.saveDraft(state);
+    state.currentStepIndex = next;
+    this.prepareCurrentSet();
   }
   pauseWorkout() {
-    const state = this.plugin.activeState;
+    const state = this.session();
     if (!state || state.isPaused)
       return;
     state.isPaused = true;
@@ -2058,7 +2307,7 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
     this.render();
   }
   resumeWorkout() {
-    const state = this.plugin.activeState;
+    const state = this.session();
     if (!state || !state.isPaused)
       return;
     const pausedDuration = Date.now() - state.pauseStartTime;
@@ -2070,20 +2319,21 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
     this.render();
   }
   goBackToLastSet() {
-    const state = this.plugin.activeState;
+    const state = this.session();
     if (!state || state.stepHistory.length === 0)
       return;
+    if (!state.isResting)
+      this.saveDraft(state);
     const lastEntry = state.stepHistory.pop();
-    const cex = state.completedExercises.find((e) => e.name === lastEntry.exerciseName);
+    const cex = state.completedExercises.find((e) => e.sets.includes(lastEntry.completedSet));
     if (cex) {
-      cex.sets.pop();
-      if (cex.sets.length === 0) {
-        const idx = state.completedExercises.indexOf(cex);
-        state.completedExercises.splice(idx, 1);
-      }
+      cex.sets.splice(cex.sets.indexOf(lastEntry.completedSet), 1);
+      if (cex.sets.length === 0)
+        state.completedExercises.splice(state.completedExercises.indexOf(cex), 1);
     }
     state.currentStepIndex = lastEntry.stepIndex;
     state.isResting = false;
+    delete state.nextStepIndex;
     state.currentReps = lastEntry.completedSet.reps;
     state.currentWeight = lastEntry.completedSet.weight;
     state.setElapsed = 0;
@@ -2092,6 +2342,33 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
     this.restAlertFired = false;
     this.render();
   }
+  /** End button (and Skip on the last open set): Save, Discard or keep going. */
+  openEndDialog() {
+    const state = this.session();
+    if (!state)
+      return;
+    const logged = state.stepHistory.length;
+    const sets = logged === 0 ? "No sets logged yet" : `${logged} of ${state.steps.length} sets logged`;
+    new EndWorkoutModal(
+      this.app,
+      `${sets} \xB7 ${formatTime(workoutElapsedSeconds(state))}`,
+      () => {
+        void this.finishWorkout();
+      },
+      () => {
+        void this.discardWorkout();
+      }
+    ).open();
+  }
+  async discardWorkout() {
+    if (!this.session())
+      return;
+    this.clearTimers();
+    this.justCompletedStep = -1;
+    await this.plugin.discardActiveWorkout();
+    new import_obsidian2.Notice("Workout discarded. Nothing was saved.");
+    this.navigateTo("home");
+  }
   async finishWorkout() {
     const state = this.plugin.activeState;
     if (!state || this.finishingWorkout)
@@ -2099,6 +2376,13 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
     this.finishingWorkout = true;
     try {
       this.clearTimers();
+      this.justCompletedStep = -1;
+      const logged = state.stepHistory.map((h) => ({
+        exerciseIndex: state.steps[h.stepIndex].exerciseIndex,
+        exerciseName: h.exerciseName,
+        setIndex: state.steps[h.stepIndex].setIndex,
+        set: h.completedSet
+      }));
       const finishedAt = /* @__PURE__ */ new Date();
       const totalDuration = workoutElapsedSeconds(state, finishedAt.getTime());
       const completed = {
@@ -2132,17 +2416,7 @@ var WorkoutTrackerView = class extends import_obsidian2.ItemView {
           this.app,
           completed.workoutName,
           async () => {
-            for (const cex of completed.exercises) {
-              const tmplEx = template.exercises.find((e) => e.name === cex.name);
-              if (!tmplEx)
-                continue;
-              cex.sets.forEach((cs, si) => {
-                if (si < tmplEx.sets.length) {
-                  tmplEx.sets[si].reps = cs.reps;
-                  tmplEx.sets[si].weight = cs.weight;
-                }
-              });
-            }
+            applyLoggedSetsToTemplate(template, logged);
             template.lastUpdatedDurationSeconds = totalDuration;
             await this.plugin.savePluginData();
             new import_obsidian2.Notice("Workout template updated!");

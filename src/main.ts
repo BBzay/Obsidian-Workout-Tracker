@@ -17,6 +17,7 @@ import {
 	WEEKDAY_LONG,
 	WEEKDAY_SHORT,
 	WEEK_ORDER,
+	distinctLocations,
 	formatDays,
 	nextScheduled,
 	normalizePlanData,
@@ -58,6 +59,8 @@ interface Workout {
 	planId?: string;
 	/** Weekdays (Date.getDay(), 0 = Sunday) this workout is scheduled in its plan. */
 	days?: number[];
+	/** Where it's done, free text (e.g. "Home gym"). Trimmed; absent when blank. */
+	location?: string;
 }
 
 interface CompletedSet {
@@ -145,7 +148,9 @@ interface WorkoutStep {
 // ─── Active Workout State ────────────────────────────────────────────────────
 
 interface CompletedStepEntry {
+	/** Index into `steps`, which keep plan order for the whole session. */
 	stepIndex: number;
+	/** Same object as the one in `completedExercises`, so edits and rest times stay in sync. */
 	completedSet: CompletedSet;
 	exerciseName: string;
 }
@@ -168,7 +173,12 @@ interface ActiveWorkoutState {
 	isPaused: boolean;
 	pauseStartTime: number;
 	totalPausedMs: number;
+	/** Completed sets in the order they were done. A step is done when it appears here. */
 	stepHistory: CompletedStepEntry[];
+	/** While resting: the set picked in the workout plan to do next (default: next unfinished in plan order). */
+	nextStepIndex?: number;
+	/** `lastUsed` values this session overwrote (null = key was new), so Discard can put them back. */
+	lastUsedBefore: Record<string, { reps: number; weight: number } | null>;
 }
 
 // ─── Screen type for unified view ───────────────────────────────────────────
@@ -251,9 +261,31 @@ function buildSteps(workout: Workout): WorkoutStep[] {
 			}
 		}
 	}
-	// No rest after the very last step of the workout
-	if (steps.length > 0) steps[steps.length - 1].restSeconds = 0;
+	// The last step keeps its rest: sets can be done out of order, and a finished workout never rests.
 	return steps;
+}
+
+/** First unfinished step after `from` in plan order, wrapping to the start. Returns `from` if it is the only one left, -1 if all are done. */
+function nextOpenStep(state: ActiveWorkoutState, from: number): number {
+	const done = new Set(state.stepHistory.map((h) => h.stepIndex));
+	const n = state.steps.length;
+	for (let k = 1; k <= n; k++) {
+		const i = (from + k) % n;
+		if (!done.has(i)) return i;
+	}
+	return -1;
+}
+
+interface LoggedSet { exerciseIndex: number; exerciseName: string; setIndex: number; set: CompletedSet; }
+
+/** Copy logged reps/weight onto the template by set number (sets may have been done out of order or skipped). */
+function applyLoggedSetsToTemplate(template: Workout, logged: LoggedSet[]): void {
+	for (const { exerciseIndex, exerciseName, setIndex, set } of logged) {
+		const byIndex = template.exercises[exerciseIndex];
+		const ex = byIndex?.name === exerciseName ? byIndex : template.exercises.find((e) => e.name === exerciseName);
+		const target = ex?.sets[setIndex];
+		if (target) { target.reps = set.reps; target.weight = set.weight; }
+	}
 }
 
 // ─── Date helpers ───────────────────────────────────────────────────────────
@@ -372,6 +404,39 @@ class ConfirmModal extends Modal {
 		btnRow.createEl('button', { text: 'Cancel' }).addEventListener('click', () => this.close());
 		const confirmBtn = btnRow.createEl('button', { text: 'Confirm', cls: 'mod-warning' });
 		confirmBtn.addEventListener('click', () => { this.onConfirm(); this.close(); });
+	}
+	onClose() { this.contentEl.empty(); }
+}
+
+/** End a running workout: save it to history, or discard the whole session (asks twice). */
+class EndWorkoutModal extends Modal {
+	private detail: string;
+	private onSave: () => void;
+	private onDiscard: () => void;
+	constructor(app: App, detail: string, onSave: () => void, onDiscard: () => void) {
+		super(app); this.detail = detail; this.onSave = onSave; this.onDiscard = onDiscard;
+	}
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.addClass('wt-end-modal');
+		contentEl.createEl('h3', { text: 'End workout?' });
+		contentEl.createEl('p', { text: this.detail, cls: 'wt-end-detail' });
+		const warning = contentEl.createDiv();
+		const btnRow = contentEl.createDiv({ cls: 'wt-modal-buttons' });
+		btnRow.createEl('button', { text: 'Keep going' }).addEventListener('click', () => this.close());
+		const discardBtn = btnRow.createEl('button', { text: 'Discard', cls: 'mod-warning' });
+		let armed = false;
+		discardBtn.addEventListener('click', () => {
+			if (!armed) {
+				armed = true;
+				discardBtn.setText('Tap again to discard');
+				warning.createEl('p', { text: 'Nothing from this session will be saved: no history, PRs or daily-note entry, and remembered weights go back to what they were.', cls: 'wt-end-warning' });
+				return;
+			}
+			this.close(); this.onDiscard();
+		});
+		const saveBtn = btnRow.createEl('button', { text: 'Save workout', cls: 'mod-cta' });
+		saveBtn.addEventListener('click', () => { this.close(); this.onSave(); });
 	}
 	onClose() { this.contentEl.empty(); }
 }
@@ -541,7 +606,11 @@ export default class WorkoutTrackerPlugin extends Plugin {
 		if (!Array.isArray(d.history)) d.history = [];
 		if (!d.lastUsed) d.lastUsed = {};
 		if (!d.personalRecords) d.personalRecords = {};
-		for (const w of d.workouts) { if (!w.supersets) w.supersets = []; }
+		for (const w of d.workouts) {
+			if (!w.supersets) w.supersets = [];
+			const location = typeof w.location === 'string' ? w.location.trim() : '';
+			if (location) w.location = location; else delete w.location;
+		}
 		normalizePlanData(d);
 	}
 
@@ -604,6 +673,12 @@ export default class WorkoutTrackerPlugin extends Plugin {
 		return next.offset === 1 ? `${names} tomorrow` : `${names} on ${WEEKDAY_LONG[(today + next.offset) % 7]}`;
 	}
 
+	/** Distinct locations of the next scheduled workout(s); empty if none are set. */
+	nextWorkoutLocations(date = new Date()): string[] {
+		const next = nextScheduled(this.data.workouts, this.getCurrentPlan()?.id, date.getDay());
+		return next ? distinctLocations(next.indices.map((i) => this.data.workouts[i].location)) : [];
+	}
+
 	async startTodaysWorkout(): Promise<void> {
 		if (this.activeState) { new Notice('A workout is already in progress.'); await this.activateView(); return; }
 		const plan = this.getCurrentPlan();
@@ -631,6 +706,8 @@ export default class WorkoutTrackerPlugin extends Plugin {
 	}
 
 	beginWorkout(workout: Workout): void {
+		// Never replace a running session (its sets and the Discard snapshot would be lost)
+		if (this.activeState) { new Notice('A workout is already in progress. End it first.'); return; }
 		if (workout.exercises.length === 0) { new Notice('This workout has no exercises. Add some first!'); return; }
 		const steps = buildSteps(workout);
 		if (steps.length === 0) { new Notice('No sets to do!'); return; }
@@ -646,8 +723,19 @@ export default class WorkoutTrackerPlugin extends Plugin {
 			completedExercises: [], currentSetStartTime: Date.now(), restStartTime: 0,
 			currentReps: last?.reps ?? firstSet?.reps ?? 0,
 			currentWeight: last?.weight ?? firstSet?.weight ?? 0,
-			isPaused: false, pauseStartTime: 0, totalPausedMs: 0, stepHistory: [],
+			isPaused: false, pauseStartTime: 0, totalPausedMs: 0, stepHistory: [], lastUsedBefore: {},
 		};
+	}
+
+	/** Drop the running session. Nothing reaches history; remembered weights it changed are restored. */
+	async discardActiveWorkout(): Promise<void> {
+		const state = this.activeState;
+		if (!state) return;
+		for (const [key, before] of Object.entries(state.lastUsedBefore)) {
+			if (before) this.data.lastUsed[key] = before; else delete this.data.lastUsed[key];
+		}
+		this.activeState = null;
+		await this.savePluginData();
 	}
 
 	getAllExerciseNames(): string[] {
@@ -710,6 +798,8 @@ class WorkoutTrackerView extends ItemView {
 	private timerIntervalId: number | null = null;
 	private dragSourceIndex: number = -1;
 	private restAlertFired: boolean = false;
+	/** Step just completed, so the workout plan animates it to green once. */
+	private justCompletedStep = -1;
 	private datalistId = 'wt-exercise-datalist-' + generateId();
 	private completedWorkout: CompletedWorkout | null = null;
 	private completedPRs: string[] = [];
@@ -879,6 +969,8 @@ class WorkoutTrackerView extends ItemView {
 		if (next) {
 			rest.createDiv({ text: 'Rest day', cls: 'wt-rest-title' });
 			rest.createDiv({ text: `Next up: ${next}`, cls: 'wt-rest-next' });
+			const places = this.plugin.nextWorkoutLocations(now);
+			if (places.length > 0) this.renderLocationLine(rest, 'wt-rest-location', places.join(' · '));
 		} else {
 			rest.createDiv({ text: 'No days scheduled yet', cls: 'wt-rest-title' });
 			rest.createDiv({ text: `Edit a workout in ${plan.name} and pick its days.`, cls: 'wt-rest-next' });
@@ -1001,6 +1093,7 @@ class WorkoutTrackerView extends ItemView {
 		}
 
 		cardBody.createEl('div', { text: workout.name, cls: 'wt-workout-card-name' });
+		if (workout.location) this.renderLocationLine(cardBody, 'wt-workout-card-location', workout.location);
 
 		const meta = cardBody.createDiv({ cls: 'wt-workout-card-meta' });
 		const exCount = workout.exercises.length;
@@ -1054,6 +1147,15 @@ class WorkoutTrackerView extends ItemView {
 			this.plugin.beginWorkout(workout);
 			if (this.plugin.activeState) this.navigateTo('active');
 		});
+	}
+
+	/** Map-pin icon + location text (plain, not a link). */
+	private renderLocationLine(parent: HTMLElement, cls: string, text: string): void {
+		const line = parent.createDiv({ cls });
+		const icon = line.createSpan({ cls: 'wt-location-icon' });
+		icon.setAttribute('aria-hidden', 'true');
+		setIcon(icon, 'map-pin');
+		line.createSpan({ text, cls: 'wt-location-text', attr: { title: text } });
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════════
@@ -1177,6 +1279,7 @@ class WorkoutTrackerView extends ItemView {
 			await this.plugin.savePluginData(); this.render();
 		});
 
+		this.renderLocation(editorSection, workout);
 		this.renderPlanAndDays(editorSection, workout);
 
 		// ── Render exercises ─────────────────────────────────────────────────
@@ -1276,6 +1379,33 @@ class WorkoutTrackerView extends ItemView {
 				await this.plugin.savePluginData();
 			});
 		}
+	}
+
+	/** Free-text location; suggests places other workouts already use. */
+	private renderLocation(parent: HTMLElement, workout: Workout): void {
+		const inputId = 'wt-location-' + generateId();
+		const row = parent.createDiv({ cls: 'wt-plan-row wt-location-row' });
+		row.createEl('label', { text: 'Location', cls: 'wt-plan-row-label', attr: { for: inputId } });
+		const input = row.createEl('input', {
+			cls: 'wt-location-input', type: 'text', value: workout.location ?? '', placeholder: 'e.g. Home gym',
+		});
+		input.id = inputId;
+
+		const others = distinctLocations(this.plugin.data.workouts.filter((w) => w !== workout).map((w) => w.location));
+		if (others.length > 0) {
+			const list = row.createEl('datalist');
+			list.id = inputId + '-list';
+			for (const loc of others) list.createEl('option', { value: loc });
+			input.setAttribute('list', list.id);
+		}
+
+		// Update in place (no full re-render) so the editor doesn't jump
+		input.addEventListener('change', async () => {
+			const location = input.value.trim();
+			input.value = location;
+			if (location) workout.location = location; else delete workout.location;
+			await this.plugin.savePluginData();
+		});
 	}
 
 	/** Render a single exercise card with drag support */
@@ -1437,9 +1567,9 @@ class WorkoutTrackerView extends ItemView {
 		header.createEl('span', { text: workout.name, cls: 'wt-active-title' });
 		header.createEl('span', { text: `Time spent: ${formatTime(workoutElapsedSeconds(state))}`, cls: 'wt-total-time' });
 		const endBtn = header.createEl('button', { text: 'End', cls: 'wt-btn wt-btn-danger wt-btn-sm' });
-		endBtn.addEventListener('click', () => { new ConfirmModal(this.app, 'End this workout early?', () => this.finishWorkout()).open(); });
+		endBtn.addEventListener('click', () => this.openEndDialog());
 
-		const done = state.currentStepIndex + (state.isResting ? 1 : 0);
+		const done = state.stepHistory.length;
 		const progressContainer = container.createDiv({ cls: 'wt-progress-container' });
 		const progressBar = progressContainer.createDiv({ cls: 'wt-progress-bar' });
 		progressBar.style.width = `${total > 0 ? (done / total) * 100 : 0}%`;
@@ -1478,6 +1608,12 @@ class WorkoutTrackerView extends ItemView {
 				setIcon(backBtn, 'undo');
 				backBtn.addEventListener('click', () => this.goBackToLastSet());
 			}
+		} else if (nextOpenStep(state, state.currentStepIndex) === -1) {
+			// Every set is logged but the session is still open (e.g. saving failed): only offer to end.
+			panel.addClass('wt-set-panel');
+			panel.createEl('div', { text: 'All sets logged', cls: 'wt-set-title' });
+			const saveBtn = panel.createEl('button', { text: 'End workout', cls: 'wt-btn wt-btn-complete' });
+			saveBtn.addEventListener('click', () => this.openEndDialog());
 		} else if (currentEx && currentSet) {
 			panel.addClass('wt-set-panel');
 			if (currentEx.supersetGroupId) panel.createEl('div', { text: 'SUPERSET', cls: 'wt-ss-active-label' });
@@ -1525,47 +1661,101 @@ class WorkoutTrackerView extends ItemView {
 			nextCard.createEl('span', { text: nextInfo });
 		}
 
-		// Collapsible upcoming exercises list
-		const remainingSteps = state.steps.slice(state.currentStepIndex + 1);
-		if (remainingSteps.length > 0) {
-			const upcomingSection = container.createEl('details', { cls: 'wt-upcoming-section' });
-			upcomingSection.open = true;
-			upcomingSection.createEl('summary', { text: `Upcoming (${remainingSteps.length} set${remainingSteps.length !== 1 ? 's' : ''} remaining)` });
-			upcomingSection.createEl('p', { text: state.setStarted && !state.isResting ? 'Finish or skip the current set to choose another exercise.' : 'Choose an available exercise. Other unfinished sets stay in the queue.', cls: 'wt-muted' });
-			const navigation = upcomingSection.createDiv({ cls: 'wt-exercise-navigation' });
-			for (const exerciseIndex of [...new Set(remainingSteps.map(s => s.exerciseIndex))]) {
-				const choose = navigation.createEl('button', { text: `${state.isResting ? 'Do next' : 'Choose'}: ${workout.exercises[exerciseIndex].name}`, cls: 'wt-btn wt-btn-sm' });
-				choose.disabled = state.isPaused || (state.setStarted && !state.isResting);
-				this.registerDomEvent(choose, 'click', () => this.chooseExercise(exerciseIndex));
-			}
-			let lastExName = '';
-			for (const rs of remainingSteps) {
-				const ex = workout.exercises[rs.exerciseIndex];
-				const row = upcomingSection.createDiv({ cls: 'wt-upcoming-row' });
-				if (ex.name !== lastExName) {
-					row.addClass('wt-upcoming-new-exercise');
-					lastExName = ex.name;
-				}
-				row.createEl('span', { text: `${ex.name} — Set ${rs.setIndex + 1}` });
-				if (rs.restSeconds > 0) row.createEl('span', { text: `${rs.restSeconds}s rest`, cls: 'wt-muted' });
-			}
-		}
-
+		this.renderWorkoutPlan(container, state);
 		this.renderPreviousSets(container, state);
 		this.startActiveTimer();
 	}
 
+	/** The whole workout in plan order. Done sets fade green; tap a set or an exercise to go there. */
+	private renderWorkoutPlan(container: HTMLElement, state: ActiveWorkoutState): void {
+		const { workout, steps } = state;
+		const done = new Set(state.stepHistory.map((h) => h.stepIndex));
+		const running = state.setStarted && !state.isResting;
+		const locked = state.isPaused || running;
+		const current = state.isResting ? -1 : state.currentStepIndex;
+		const upNext = this.getUpNextStep(state);
+		const justDone = this.justCompletedStep;
+		this.justCompletedStep = -1;
+		const unit = this.plugin.data.settings.weightUnit;
+
+		// Step indices per exercise; Map keeps first-appearance (= plan) order
+		const byExercise = new Map<number, number[]>();
+		steps.forEach((s, i) => {
+			const list = byExercise.get(s.exerciseIndex);
+			if (list) list.push(i); else byExercise.set(s.exerciseIndex, [i]);
+		});
+
+		const section = container.createDiv({ cls: 'wt-workout-plan' });
+		const head = section.createDiv({ cls: 'wt-workout-plan-head' });
+		head.createSpan({ text: 'Workout plan', cls: 'wt-workout-plan-title' });
+		const left = steps.length - done.size;
+		head.createSpan({ text: left === 0 ? 'All done' : `${left} set${left !== 1 ? 's' : ''} left`, cls: 'wt-workout-plan-count' });
+		const hint = state.isPaused ? 'Resume to move around the workout.'
+			: running ? 'Finish or skip this set to jump somewhere else.'
+			: state.isResting ? 'Tap any set to do it next.'
+			: 'Tap any set to jump to it.';
+		section.createDiv({ text: hint, cls: 'wt-workout-plan-hint' });
+
+		let prevGroup: string | undefined;
+		for (const [exIdx, idxs] of byExercise) {
+			const ex = workout.exercises[exIdx];
+			if (ex.supersetGroupId && ex.supersetGroupId !== prevGroup) section.createDiv({ text: 'Superset', cls: 'wt-workout-plan-ss' });
+			prevGroup = ex.supersetGroupId;
+
+			const doneCount = idxs.filter((i) => done.has(i)).length;
+			const exDone = doneCount === idxs.length;
+			const firstOpen = idxs.find((i) => !done.has(i)) ?? -1;
+
+			const item = section.createDiv({ cls: 'wt-workout-plan-item' });
+			if (ex.supersetGroupId) item.addClass('is-superset');
+			if (exDone) item.addClass('is-done');
+			else if (doneCount > 0) item.addClass('is-partial');
+			if (idxs.includes(current)) item.addClass('is-current');
+			else if (upNext !== -1 && idxs.includes(upNext)) item.addClass('is-next');
+			if (exDone && idxs.includes(justDone)) item.addClass('wt-just-done');
+
+			const main = item.createEl('button', { cls: 'wt-workout-plan-main' });
+			const status = main.createSpan({ cls: 'wt-workout-plan-status' });
+			if (exDone) setIcon(status, 'check');
+			const text = main.createSpan({ cls: 'wt-workout-plan-text' });
+			text.createSpan({ text: ex.name, cls: 'wt-workout-plan-name' });
+			const first = ex.sets[0];
+			let target = `${ex.sets.length} × ${first?.reps ?? 0}${first && first.weight > 0 ? ` @ ${first.weight} ${unit}` : ''}`;
+			if (ex.modifier) target += ` · ${ex.modifier}`;
+			const meta = exDone ? `All ${idxs.length} set${idxs.length !== 1 ? 's' : ''} done`
+				: doneCount > 0 ? `${doneCount} of ${idxs.length} done` : target;
+			text.createSpan({ text: meta, cls: 'wt-workout-plan-meta' });
+			main.disabled = locked || exDone || firstOpen === current;
+			if (!main.disabled) main.setAttribute('title', `${state.isResting ? 'Do next' : 'Go to'}: set ${steps[firstOpen].setIndex + 1}`);
+			main.addEventListener('click', () => this.jumpToStep(firstOpen));
+
+			const pills = item.createDiv({ cls: 'wt-workout-plan-sets' });
+			for (const i of idxs) {
+				const setNo = steps[i].setIndex + 1;
+				const isDone = done.has(i);
+				const pill = pills.createEl('button', { text: String(setNo), cls: 'wt-set-pill' });
+				if (isDone) pill.addClass('is-done');
+				if (i === current) pill.addClass('is-current');
+				else if (i === upNext) pill.addClass('is-next');
+				if (isDone && i === justDone) pill.addClass('wt-just-done');
+				pill.disabled = locked || isDone || i === current;
+				const label = isDone ? 'done' : i === current ? 'current' : i === upNext ? 'up next' : 'not done';
+				pill.setAttribute('aria-label', `${ex.name} set ${setNo}, ${label}`);
+				pill.addEventListener('click', () => this.jumpToStep(i));
+			}
+		}
+	}
+
 	private renderPreviousSets(container: HTMLElement, state: ActiveWorkoutState): void {
-		const allSets: { exerciseName: string; setNum: number; cs: CompletedSet }[] = [];
-		for (const cex of state.completedExercises) for (let i = 0; i < cex.sets.length; i++) allSets.push({ exerciseName: cex.name, setNum: i + 1, cs: cex.sets[i] });
-		if (allSets.length === 0) return;
+		if (state.stepHistory.length === 0) return;
 		const section = container.createDiv({ cls: 'wt-previous-sets' });
 		section.createEl('div', { text: 'Completed Sets', cls: 'wt-prev-heading' });
 		const unit = this.plugin.data.settings.weightUnit;
-		for (let i = allSets.length - 1; i >= 0; i--) {
-			const { exerciseName, setNum, cs } = allSets[i];
+		// Most recent first; labels use the plan's set number
+		for (let i = state.stepHistory.length - 1; i >= 0; i--) {
+			const { stepIndex, exerciseName, completedSet: cs } = state.stepHistory[i];
 			const setRow = section.createDiv({ cls: 'wt-prev-set-row' });
-			setRow.createEl('span', { text: `${exerciseName} S${setNum}: `, cls: 'wt-prev-set-label' });
+			setRow.createEl('span', { text: `${exerciseName} S${state.steps[stepIndex].setIndex + 1}: `, cls: 'wt-prev-set-label' });
 			const rInput = setRow.createEl('input', { type: 'number', value: String(cs.reps), cls: 'wt-prev-input' });
 			setRow.createEl('span', { text: ' reps × ' });
 			const wInput = setRow.createEl('input', { type: 'number', value: String(cs.weight), cls: 'wt-prev-input' });
@@ -1575,9 +1765,16 @@ class WorkoutTrackerView extends ItemView {
 		}
 	}
 
+	/** Step after the current one: the set picked during rest, else the next unfinished one in plan order. -1 if none. */
+	private getUpNextStep(state: ActiveWorkoutState): number {
+		if (state.isResting && state.nextStepIndex !== undefined) return state.nextStepIndex;
+		const next = nextOpenStep(state, state.currentStepIndex);
+		return next === state.currentStepIndex ? -1 : next;
+	}
+
 	private getNextSetInfo(state: ActiveWorkoutState): string | null {
-		const nextIdx = state.currentStepIndex + 1;
-		if (nextIdx >= state.steps.length) return null;
+		const nextIdx = this.getUpNextStep(state);
+		if (nextIdx === -1) return null;
 		const nextStep = state.steps[nextIdx];
 		const nextEx = state.workout.exercises[nextStep.exerciseIndex];
 		return `${nextEx.name} — Set ${nextStep.setIndex + 1} of ${nextEx.sets.length}`;
@@ -1616,44 +1813,73 @@ class WorkoutTrackerView extends ItemView {
 		}
 	}
 
+	/** The running session, or null while a finish is saving (so taps can't change what gets saved). */
+	private session(): ActiveWorkoutState | null {
+		return this.finishingWorkout ? null : this.plugin.activeState;
+	}
+
 	private async completeCurrentSet(): Promise<void> {
-		const state = this.plugin.activeState;
+		const state = this.session();
 		if (!state || !state.setStarted || state.isResting || state.isPaused) return;
 		state.setStarted = false;
 		state.setElapsed = Math.floor((Date.now() - state.currentSetStartTime) / 1000);
-		const step = state.steps[state.currentStepIndex];
+		// Record synchronously so a tap during the save can't change which set this was.
+		const stepIndex = state.currentStepIndex;
+		const step = state.steps[stepIndex];
 		const currentEx = state.workout.exercises[step.exerciseIndex];
 		const cs: CompletedSet = { reps: state.currentReps, weight: state.currentWeight, setSeconds: state.setElapsed, actualRestSeconds: 0 };
 		const key = lastUsedKey(state.workout.name, currentEx.name, step.setIndex);
+		if (!(key in state.lastUsedBefore)) {
+			const before = this.plugin.data.lastUsed[key];
+			state.lastUsedBefore[key] = before ? { ...before } : null;
+		}
 		this.plugin.data.lastUsed[key] = { reps: state.currentReps, weight: state.currentWeight };
-		await this.plugin.savePluginData();
 		let completedEx = state.completedExercises.find((e) => e.name === currentEx.name);
 		if (!completedEx) { completedEx = { name: currentEx.name, sets: [] }; state.completedExercises.push(completedEx); }
-		completedEx.sets.push(cs);
-		state.stepHistory.push({ stepIndex: state.currentStepIndex, completedSet: { ...cs }, exerciseName: currentEx.name });
-		if (state.currentStepIndex === state.steps.length - 1) { this.finishWorkout(); return; }
+		// Keep sets in plan order even when done out of order. Plan position (not set number),
+		// because two exercises with the same name share one entry here.
+		const planPos = (s: CompletedSet) => state.stepHistory.find((e) => e.completedSet === s)?.stepIndex ?? Number.MAX_SAFE_INTEGER;
+		const at = completedEx.sets.findIndex((s) => planPos(s) > stepIndex);
+		completedEx.sets.splice(at < 0 ? completedEx.sets.length : at, 0, cs);
+		state.stepHistory.push({ stepIndex, completedSet: cs, exerciseName: currentEx.name });
+		this.justCompletedStep = stepIndex;
+		if (nextOpenStep(state, stepIndex) === -1) { await this.finishWorkout(); return; }
 		if (step.restSeconds > 0) {
 			state.isResting = true; state.restRemaining = step.restSeconds; state.restStartTime = Date.now(); this.restAlertFired = false; this.render();
 		} else { this.advanceToNextStep(); }
+		await this.plugin.savePluginData();
 	}
 
 	private advanceFromRest(): void {
-		const state = this.plugin.activeState;
-		if (!state) return;
+		const state = this.session();
+		if (!state || !state.isResting) return;
 		const lastEntry = state.stepHistory[state.stepHistory.length - 1];
-		const lastCex = state.completedExercises.find(e => e.name === lastEntry?.exerciseName);
-		if (lastCex && lastCex.sets.length > 0) lastCex.sets[lastCex.sets.length - 1].actualRestSeconds = Math.floor((Date.now() - state.restStartTime) / 1000);
+		if (lastEntry) lastEntry.completedSet.actualRestSeconds = Math.floor((Date.now() - state.restStartTime) / 1000);
 		state.isResting = false;
-		this.advanceToNextStep();
+		const chosen = state.nextStepIndex;
+		delete state.nextStepIndex;
+		const chosenOpen = chosen !== undefined && !state.stepHistory.some((h) => h.stepIndex === chosen);
+		const target = chosenOpen ? chosen : nextOpenStep(state, state.currentStepIndex);
+		if (target === -1) { void this.finishWorkout(); return; }
+		state.currentStepIndex = target;
+		this.prepareCurrentSet();
 		this.startCurrentSet();
 	}
 
+	/** After a set with no rest: go to the next unfinished set in plan order. */
 	private advanceToNextStep(): void {
 		const state = this.plugin.activeState;
 		if (!state) return;
-		state.currentStepIndex++;
-		if (state.currentStepIndex >= state.steps.length) return;
+		const next = nextOpenStep(state, state.currentStepIndex);
+		if (next === -1) return;
+		state.currentStepIndex = next;
 		this.prepareCurrentSet();
+	}
+
+	/** Keep what was typed for the current set, so coming back to it restores it. */
+	private saveDraft(state: ActiveWorkoutState): void {
+		const step = state.steps[state.currentStepIndex];
+		if (step) state.setDrafts[`${step.exerciseIndex}:${step.setIndex}`] = { reps: state.currentReps, weight: state.currentWeight };
 	}
 
 	private prepareCurrentSet(): void {
@@ -1671,40 +1897,41 @@ class WorkoutTrackerView extends ItemView {
 	}
 
 	private startCurrentSet(): void {
-		const state = this.plugin.activeState;
+		const state = this.session();
 		if (!state || state.setStarted || state.isPaused || state.isResting) return;
+		if (state.stepHistory.some((h) => h.stepIndex === state.currentStepIndex)) return; // already logged
 		state.setStarted = true; state.setElapsed = 0; state.currentSetStartTime = Date.now();
 		this.render();
 	}
 
-	private chooseExercise(exerciseIndex: number): void {
-		const state = this.plugin.activeState;
+	/**
+	 * Tap in the workout plan. Ready: go to that set now. Resting: make it the next set (rest keeps running).
+	 * Ignored while a set is running or paused, and for sets already done. Plan order never changes.
+	 */
+	private jumpToStep(index: number): void {
+		const state = this.session();
 		if (!state || state.isPaused || (state.setStarted && !state.isResting)) return;
-		const start = state.currentStepIndex + (state.isResting ? 1 : 0);
-		const pending = state.steps.slice(start);
-		const chosen = pending.filter(s => s.exerciseIndex === exerciseIndex);
-		if (!chosen.length) return;
-		if (!state.isResting) {
-			const step = state.steps[state.currentStepIndex];
-			state.setDrafts[`${step.exerciseIndex}:${step.setIndex}`] = { reps: state.currentReps, weight: state.currentWeight };
-		}
-		// Only reorder pending steps. Completed step/history indices remain stable.
-		state.steps.splice(start, pending.length, ...chosen, ...pending.filter(s => s.exerciseIndex !== exerciseIndex));
-		if (state.isResting) this.render(); else this.prepareCurrentSet();
+		if (index < 0 || index >= state.steps.length || state.stepHistory.some((h) => h.stepIndex === index)) return;
+		if (state.isResting) { state.nextStepIndex = index; this.render(); return; }
+		if (index === state.currentStepIndex) return;
+		this.saveDraft(state);
+		state.currentStepIndex = index;
+		this.prepareCurrentSet();
 	}
 
+	/** Leave this set unfinished and go to the next unfinished one (wrapping). With nothing else left, offer to end. */
 	private skipCurrentSet(): void {
-		const state = this.plugin.activeState;
-		if (!state) return;
-		if (state.currentStepIndex === state.steps.length - 1) {
-			this.finishWorkout();
-			return;
-		}
-		this.advanceToNextStep();
+		const state = this.session();
+		if (!state || state.isPaused || state.isResting) return;
+		const next = nextOpenStep(state, state.currentStepIndex);
+		if (next === -1 || next === state.currentStepIndex) { this.openEndDialog(); return; }
+		this.saveDraft(state);
+		state.currentStepIndex = next;
+		this.prepareCurrentSet();
 	}
 
 	private pauseWorkout(): void {
-		const state = this.plugin.activeState;
+		const state = this.session();
 		if (!state || state.isPaused) return;
 		state.isPaused = true;
 		state.pauseStartTime = Date.now();
@@ -1712,7 +1939,7 @@ class WorkoutTrackerView extends ItemView {
 	}
 
 	private resumeWorkout(): void {
-		const state = this.plugin.activeState;
+		const state = this.session();
 		if (!state || !state.isPaused) return;
 		const pausedDuration = Date.now() - state.pauseStartTime;
 		state.totalPausedMs += pausedDuration;
@@ -1724,21 +1951,20 @@ class WorkoutTrackerView extends ItemView {
 	}
 
 	private goBackToLastSet(): void {
-		const state = this.plugin.activeState;
+		const state = this.session();
 		if (!state || state.stepHistory.length === 0) return;
+		if (!state.isResting) this.saveDraft(state);
 		const lastEntry = state.stepHistory.pop()!;
-		// Remove the set from completedExercises
-		const cex = state.completedExercises.find((e) => e.name === lastEntry.exerciseName);
+		// Remove exactly that set (it may sit anywhere in its exercise's list)
+		const cex = state.completedExercises.find((e) => e.sets.includes(lastEntry.completedSet));
 		if (cex) {
-			cex.sets.pop();
-			if (cex.sets.length === 0) {
-				const idx = state.completedExercises.indexOf(cex);
-				state.completedExercises.splice(idx, 1);
-			}
+			cex.sets.splice(cex.sets.indexOf(lastEntry.completedSet), 1);
+			if (cex.sets.length === 0) state.completedExercises.splice(state.completedExercises.indexOf(cex), 1);
 		}
 		// Go back to that step
 		state.currentStepIndex = lastEntry.stepIndex;
 		state.isResting = false;
+		delete state.nextStepIndex;
 		state.currentReps = lastEntry.completedSet.reps;
 		state.currentWeight = lastEntry.completedSet.weight;
 		state.setElapsed = 0;
@@ -1748,12 +1974,37 @@ class WorkoutTrackerView extends ItemView {
 		this.render();
 	}
 
+	/** End button (and Skip on the last open set): Save, Discard or keep going. */
+	private openEndDialog(): void {
+		const state = this.session();
+		if (!state) return;
+		const logged = state.stepHistory.length;
+		const sets = logged === 0 ? 'No sets logged yet' : `${logged} of ${state.steps.length} sets logged`;
+		new EndWorkoutModal(this.app, `${sets} · ${formatTime(workoutElapsedSeconds(state))}`,
+			() => { void this.finishWorkout(); },
+			() => { void this.discardWorkout(); }).open();
+	}
+
+	private async discardWorkout(): Promise<void> {
+		if (!this.session()) return;
+		this.clearTimers();
+		this.justCompletedStep = -1;
+		await this.plugin.discardActiveWorkout();
+		new Notice('Workout discarded. Nothing was saved.');
+		this.navigateTo('home');
+	}
+
 	private async finishWorkout(): Promise<void> {
 		const state = this.plugin.activeState;
 		if (!state || this.finishingWorkout) return;
 		this.finishingWorkout = true;
 		try {
 			this.clearTimers();
+			this.justCompletedStep = -1;
+			const logged: LoggedSet[] = state.stepHistory.map((h) => ({
+				exerciseIndex: state.steps[h.stepIndex].exerciseIndex, exerciseName: h.exerciseName,
+				setIndex: state.steps[h.stepIndex].setIndex, set: h.completedSet,
+			}));
 			const finishedAt = new Date();
 			const totalDuration = workoutElapsedSeconds(state, finishedAt.getTime());
 			const completed: CompletedWorkout = {
@@ -1781,11 +2032,7 @@ class WorkoutTrackerView extends ItemView {
 			if (template) {
 				new UpdateWorkoutModal(this.app, completed.workoutName,
 					async () => {
-						for (const cex of completed.exercises) {
-							const tmplEx = template.exercises.find((e) => e.name === cex.name);
-							if (!tmplEx) continue;
-							cex.sets.forEach((cs, si) => { if (si < tmplEx.sets.length) { tmplEx.sets[si].reps = cs.reps; tmplEx.sets[si].weight = cs.weight; } });
-						}
+						applyLoggedSetsToTemplate(template, logged);
 						template.lastUpdatedDurationSeconds = totalDuration;
 						await this.plugin.savePluginData();
 						new Notice('Workout template updated!');

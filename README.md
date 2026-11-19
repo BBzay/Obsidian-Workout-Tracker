@@ -19,6 +19,9 @@ A full-featured workout ledger plugin for Obsidian that works on both desktop an
 
 ### Active Workout Mode
 - Step-by-step guided workout with a progress bar
+- **Workout plan** list: every exercise in order with a button per set. Done sets fade green, so what's left is obvious
+- Skip around: tap any unfinished set (or exercise) to jump to it; during rest, the tap picks what's next. Skip leaves a set open to come back to
+- **End → Save or Discard**: Discard throws the session away (no history, PRs or daily-note entry; remembered weights restored)
 - Built-in rest timer with configurable duration
 - Sound ping and vibration alerts when rest is over (mobile supported)
 - Displays your previous sets for each exercise so you know what to beat
@@ -27,6 +30,7 @@ A full-featured workout ledger plugin for Obsidian that works on both desktop an
 
 ### Edit Mode
 - Create, duplicate, rename, and delete workout templates
+- **Location** per workout (e.g. "Home gym"), shown on Home and Today cards and on the rest-day "Next up" card
 - Add exercises with custom sets, reps, and weight targets
 - Drag-and-drop reordering (with up/down buttons on mobile)
 - Exercise name autocomplete based on your workout history
@@ -131,6 +135,12 @@ Validation: `npm run build`, `node test-active.cjs`, `node test-daily.cjs`, `nod
 Plans group workouts into foldable sections on Home (fold state is remembered). Each workout can belong to one plan and be assigned weekdays in Edit mode. One plan is "current": its workout for today appears at the top of Home with Start ready, rest days show the next scheduled workout, and the "Start today's workout" command starts it directly (it never replaces a workout already in progress). Workouts outside any plan appear under "No plan"; with no plans at all, Home looks as before. History, PRs and remembered weights are untouched because plan membership is stored on the workout. Export/import carries plans.
 
 Validation: `npm run build`, `npm test` (`test-active.cjs`, `test-daily.cjs`, `test-plans.cjs`), `node --check main.js`. Published through BRAT. After completing any active workout, run BRAT update check, restart Obsidian and confirm version 1.6.0. Actual phone operation requires device verification.
+
+## 1.7.0 changes
+
+Each workout can have a location (Edit → Location, with suggestions from your other workouts); it shows under the workout name on Home and Today cards and on the rest-day card for the next workout. During a workout, the Choose/Do next buttons are replaced by a Workout plan list: every exercise in plan order with a button per set. Done sets fade green; tap any unfinished set or exercise to jump there (while resting, the tap picks the next set and the rest timer keeps running). Skip leaves a set unfinished and moves to the next open one, wrapping around; skipping the last open set offers to end. End now asks Save workout / Discard / Keep going; Discard needs a second tap and saves nothing (remembered weights the session changed are restored). Sets done out of order are logged and copied to the template under the right set number.
+
+Validation: `npm run build`, `npm test` (`test-active.cjs`, `test-daily.cjs`, `test-plans.cjs`), `node --check main.js`. Published through BRAT. After completing any active workout, run BRAT update check, restart Obsidian and confirm version 1.7.0. Actual phone operation requires device verification.
 
 ## Release delivery
 

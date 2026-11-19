@@ -11,7 +11,7 @@ const obsidian = {
 const code = buildSync({ stdin: { contents: fs.readFileSync('src/main.ts', 'utf8') + '\nexport * from "./plans";', resolveDir: process.cwd() + '/src', loader: 'ts' }, bundle: true, platform: 'node', format: 'cjs', external: ['obsidian'], write: false }).outputFiles[0].text;
 const sandbox = { module: { exports: {} }, require: () => obsidian, Date: FakeDate };
 vm.runInNewContext(code, sandbox);
-const { default: Plugin, formatDays, workoutsOnDay, nextScheduled, planWorkoutIndices, normalizePlanData } = sandbox.module.exports;
+const { default: Plugin, formatDays, workoutsOnDay, nextScheduled, planWorkoutIndices, normalizePlanData, distinctLocations } = sandbox.module.exports;
 
 const w = (name, planId, days) => ({ name, planId, days, exercises: [{ name: name + ' ex', modifier: '', sets: [{ reps: 5, weight: 10, restSeconds: 0 }] }], supersets: [] });
 
@@ -56,6 +56,24 @@ const w = (name, planId, days) => ({ name, planId, days, exercises: [{ name: nam
   const fresh = new Plugin(); fresh.loadData = async () => null; await fresh.loadPluginData();
   assert.deepEqual([...fresh.data.plans], [], 'default plans array is not shared between loads');
 
+  // ── location ──
+  const located = new Plugin();
+  located.loadData = async () => ({ history: [], workouts: [
+    { name: 'Padded', exercises: [], location: '  Downtown YMCA \t' }, { name: 'Blank', exercises: [], location: '   ' },
+    { name: 'Number', exercises: [], location: 42 }, { name: 'Null', exercises: [], location: null }, { name: 'None', exercises: [] },
+  ] });
+  await located.loadPluginData();
+  const [padded, blank, num, nul, none] = located.data.workouts;
+  assert.equal(padded.location, 'Downtown YMCA', 'location trimmed');
+  for (const x of [blank, num, nul]) assert.equal('location' in x, false, `${x.name}: blank/non-string location dropped`);
+  assert.equal('location' in none, false, 'workout without a location left alone');
+  assert.equal(none.name, 'None');
+  located.normalizeData();
+  assert.equal(padded.location, 'Downtown YMCA', 'normalize is idempotent');
+  assert.deepEqual([...distinctLocations([' Home gym', 'home gym  ', undefined, '', '   ', 'Downtown YMCA', 'attic'])], ['attic', 'Downtown YMCA', 'Home gym'],
+    'trimmed, case-insensitive dedupe (first spelling wins), sorted');
+  assert.deepEqual([...distinctLocations([])], []);
+
   // ── today's workout ──
   const plugin = new Plugin(); plugin.savePluginData = async () => {}; plugin.activateView = async () => {};
   plugin.loadData = async () => ({ workouts: JSON.parse(JSON.stringify(workouts)), history: [], plans: [{ id: 'p1', name: 'Summer' }, { id: 'p2', name: 'Winter' }], currentPlanId: 'p1' });
@@ -78,5 +96,19 @@ const w = (name, planId, days) => ({ name, planId, days, exercises: [{ name: nam
   await plugin.startTodaysWorkout();
   assert.equal(plugin.activeState.workout.name, 'Busy', 'never replaces a workout already in progress');
 
-  console.log('PASS: day formatting, current-plan-only scheduling, rest-day next-up with week wrap, plan ordering, normalization, legacy load, today command');
+  // ── rest-day next-up locations ──
+  const tuesday = new Date(2026, 10, 17, 9);
+  assert.deepEqual([...plugin.nextWorkoutLocations(tuesday)], [], 'no locations set → none shown');
+  const byName = (n) => plugin.data.workouts.find(x => x.name === n);
+  byName('Pull').location = 'Downtown YMCA';
+  assert.deepEqual([...plugin.nextWorkoutLocations(tuesday)], ['Downtown YMCA'], 'Pull on Wednesday is next from Tuesday');
+  byName('Unscheduled').days = [3]; byName('Unscheduled').location = 'downtown ymca';
+  byName('Push').location = 'Home gym';
+  assert.deepEqual([...plugin.nextWorkoutLocations(tuesday)], ['Downtown YMCA'], 'same place twice is listed once; other days ignored');
+  byName('Unscheduled').location = 'Park';
+  assert.deepEqual([...plugin.nextWorkoutLocations(tuesday)], ['Downtown YMCA', 'Park']);
+  plugin.data.currentPlanId = undefined;
+  assert.deepEqual([...plugin.nextWorkoutLocations(tuesday)], [], 'no current plan → none');
+
+  console.log('PASS: day formatting, current-plan-only scheduling, rest-day next-up with week wrap, plan ordering, normalization, legacy load, location normalize/suggestions/next-up, today command');
 })().catch(e => { console.error(e); process.exitCode = 1; });

@@ -1,6 +1,6 @@
 {
   "name": "my-obsidian-plugin",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "A custom Obsidian plugin for desktop and mobile.",
   "main": "main.js",
   "scripts": {

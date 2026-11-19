@@ -1303,50 +1303,262 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   UPCOMING EXERCISES (active workout)
+   WORKOUT PLAN (active workout): the whole plan in order, done sets fade green
    ═══════════════════════════════════════════════════════════════════════════ */
 
-.wt-upcoming-section {
-  margin-bottom: 12px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
-  overflow: hidden;
+.wt-active-mode {
+  --wt-green: var(--color-green, #22c55e);
+  --wt-green-rgb: var(--color-green-rgb, 34, 197, 94);
 }
 
-.wt-upcoming-section summary {
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-muted);
-  padding: 8px 12px;
-  min-height: 44px;
+.wt-workout-plan {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
   background: var(--background-secondary);
 }
 
-.wt-upcoming-section summary:hover {
-  background: var(--background-modifier-hover);
-}
-
-.wt-upcoming-row {
+.wt-workout-plan-head {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
-  align-items: center;
-  padding: 5px 12px;
+  gap: 8px;
+}
+
+.wt-workout-plan-title {
   font-size: 13px;
-  border-bottom: 1px solid var(--background-modifier-border);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
 }
 
-.wt-upcoming-row:last-child {
-  border-bottom: none;
+.wt-workout-plan-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
-.wt-upcoming-new-exercise {
-  border-top: 2px solid var(--interactive-accent);
-  margin-top: 2px;
-  padding-top: 6px;
-  font-weight: 500;
+.wt-workout-plan-hint {
+  font-size: 12px;
+  color: var(--text-faint);
+  margin-bottom: 2px;
+}
+
+.wt-workout-plan-ss {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-accent);
+  margin: 4px 0 -2px 4px;
+}
+
+.wt-workout-plan-item {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  transition: background-color 0.4s ease, border-color 0.4s ease, opacity 0.4s ease;
+}
+
+.wt-workout-plan-item.is-superset {
+  border-left: 3px solid var(--interactive-accent);
+}
+
+.wt-workout-plan-item.is-next {
+  border-style: dashed;
+  border-color: var(--interactive-accent);
+}
+
+.wt-workout-plan-item.is-current {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+.wt-workout-plan-item.is-done {
+  background: rgba(var(--wt-green-rgb), 0.12);
+  border-color: rgba(var(--wt-green-rgb), 0.4);
+  opacity: 0.72;
+}
+
+/* Exercise name: tap to go to its next unfinished set */
+.wt-workout-plan-main {
+  flex: 1 1 150px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  height: auto;
+  min-height: 44px;
+  padding: 4px 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wt-workout-plan-main:hover:not(:disabled) {
+  background: transparent;
+}
+
+.wt-workout-plan-main:hover:not(:disabled) .wt-workout-plan-name {
+  color: var(--text-accent);
+}
+
+.wt-workout-plan-main:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.wt-workout-plan-status {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--text-faint);
+}
+
+.wt-workout-plan-item.is-partial .wt-workout-plan-status {
+  border-color: var(--interactive-accent);
+  background: radial-gradient(circle, var(--interactive-accent) 0 35%, transparent 40%);
+}
+
+.wt-workout-plan-item.is-done .wt-workout-plan-status {
+  border-color: var(--wt-green);
+  background: var(--wt-green);
+  color: #fff;
+}
+
+.wt-workout-plan-status svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 3;
+}
+
+.wt-workout-plan-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.wt-workout-plan-name,
+.wt-workout-plan-meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wt-workout-plan-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.wt-workout-plan-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.wt-workout-plan-item.is-done .wt-workout-plan-name {
+  color: var(--wt-green);
+}
+
+/* Set pills: tap to go to that exact set */
+.wt-workout-plan-sets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.wt-set-pill {
+  min-width: 38px;
+  height: 38px;
+  padding: 0 8px;
+  border-radius: 19px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--interactive-normal);
+  box-shadow: none;
+  color: var(--text-normal);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.wt-set-pill:hover:not(:disabled) {
+  border-color: var(--interactive-accent);
+}
+
+.wt-set-pill.is-next {
+  border: 2px dashed var(--interactive-accent);
+}
+
+.wt-set-pill.is-current {
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.wt-set-pill.is-done {
+  background: rgba(var(--wt-green-rgb), 0.22);
+  border-color: rgba(var(--wt-green-rgb), 0.55);
+  color: var(--wt-green);
+}
+
+/* Full-size touch targets on phones */
+body.is-mobile .wt-set-pill {
+  min-width: 44px;
+  height: 44px;
+  border-radius: 22px;
+}
+
+.wt-set-pill:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+@keyframes wt-fade-green {
+  from { background-color: var(--background-primary); border-color: var(--background-modifier-border); opacity: 1; }
+}
+
+@keyframes wt-pill-done {
+  0% { transform: scale(1.2); background-color: rgba(var(--wt-green-rgb), 0.7); }
+  100% { transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .wt-workout-plan-item.wt-just-done { animation: wt-fade-green 0.9s ease-out; }
+  .wt-set-pill.wt-just-done { animation: wt-pill-done 0.5s ease-out; }
+}
+
+/* End workout dialog */
+.wt-end-detail {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.wt-end-warning {
+  color: var(--text-error);
+  font-size: 13px;
+}
+
+.wt-end-modal .wt-modal-buttons {
+  flex-wrap: wrap;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1427,11 +1639,6 @@
   white-space: pre-wrap;
   color: var(--text-muted);
 }
-
-/* Keep available exercises reachable during a lift. */
-.wt-exercise-navigation { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
-.wt-exercise-navigation .wt-btn { white-space: normal; text-align: left; min-height: 40px; }
-.wt-upcoming-section { max-height: 340px; overflow-y: auto; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    PLANS + TODAY (home screen)
@@ -1689,4 +1896,69 @@
 .wt-plan-pick-list {
   max-height: 50vh;
   overflow-y: auto;
+}
+
+/* ─── LOCATION ─── */
+
+/* "Location" is the widest editor label; widen the column so all rows stay aligned */
+.wt-editor .wt-plan-row-label {
+  width: 4.75em;
+  white-space: nowrap;
+}
+
+/* Two classes to beat Obsidian's input[type='text'] defaults */
+.wt-location-row .wt-location-input {
+  flex: 1;
+  min-width: 0;
+  height: auto;
+  min-height: 44px;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.wt-workout-card-location,
+.wt-rest-location {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-muted);
+}
+
+.wt-workout-card-location {
+  font-size: 12px;
+  padding-right: 30px;
+}
+
+.wt-today-card .wt-workout-card-location {
+  padding-right: 0;
+}
+
+.wt-rest-location {
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.wt-location-icon {
+  --icon-size: 14px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.wt-location-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.wt-location-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
